@@ -247,6 +247,15 @@ is now Conan. `NmosBackend` in `nmos/include/pcapreplay/nmos/nmos_node.h` is the
 seam — adding an nmos-cpp backend means another implementation of that
 interface, not a rewrite of the app.
 
+## Licence
+
+MIT — see [LICENSE](LICENSE).
+
+The whole thing is first-party: there are no bundled third-party sources and no
+libraries to link beyond the Windows SDK (`ws2_32`, `iphlpapi`, `winmm`,
+`dnsapi`, `comctl32`), so there is nothing else whose terms you have to satisfy.
+That is a large part of why the NMOS layer is hand-rolled.
+
 ## A note on captured media
 
 `.pcap`, `.sdi` and `.wav` files are gitignored: they contain off-air broadcast
