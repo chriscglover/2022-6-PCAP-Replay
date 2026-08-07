@@ -152,6 +152,34 @@ Resource UUIDs are **deterministic** (UUID v5 over the machine name and the
 resource role), so they survive a restart and a controller's existing route
 still points at something that exists.
 
+### More than one instance on a machine
+
+Nothing in IS-04 requires the node API to be on 3210 — it is a convention, and
+the node's own `href` and its DNS-SD advertisement both carry whatever was
+actually bound. So a second instance **steps to the next free port** rather than
+refusing to start, and says so in the status panel. The loopback stats port does
+the same, so the second instance keeps a scriptable surface too.
+
+A second instance also needs its own identity, or both copies register the same
+UUIDs and fight over them in the registry. The node port therefore joins the UUID
+seed — but **only when it is not 3210**, so an instance on the default port keeps
+exactly the IDs it had before and an existing route is not orphaned by upgrading.
+
+| | Instance 1 | Instance 2 |
+|---|---|---|
+| Node API | `:3210` | `:3211` |
+| Stats | `:49610` | `:49611` |
+| Sender UUID | unchanged from before | its own |
+| Label | `PCAP Replay 3210 - 1080i25` | `PCAP Replay 3211 - 625i25` |
+
+Labels carry the port **and** the loaded format, because that is what someone is
+choosing between in a controller. The format is deliberately *not* in the UUID
+seed: a UUID is an identity and has to outlive the thing it identifies changing,
+so folding the format in would mint a whole new node, device, source, flow and
+sender every time a different capture was loaded, and break every route a
+controller had made. Labels may change over a resource's life; identities may
+not.
+
 ### Finding the registry
 
 Both DNS-SD service types are browsed, because which one a registry advertises

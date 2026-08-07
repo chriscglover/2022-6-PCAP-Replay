@@ -18,6 +18,18 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
+// The port an instance gets unless something is already on it. Instances that
+// land here keep the identity they had before per-instance seeding existed.
+constexpr std::uint16_t kDefaultNodePort = 3210;
+
+// The short format token out of the engine's description -- "1080i25" from
+// "1080i25 (1080i50)  1920x1080  1.485 Gb/s". Labels want the token; the full
+// text stays in the description, where there is room for it.
+std::string shortFormat(const std::string& formatText) {
+    const std::size_t sp = formatText.find(' ');
+    return sp == std::string::npos ? formatText : formatText.substr(0, sp);
+}
+
 std::string joinUrl(const std::string& host, std::uint16_t port,
                     const std::string& path) {
     return "http://" + host + ":" + std::to_string(port) + path;
@@ -105,6 +117,21 @@ private:
         if (!stagedValid_) stagedMasterEnable_ = live;
     }
 
+    // What a controller shows in its list. Two instances on one machine have to
+    // be tellable apart at a glance, so the port goes in -- it is the one thing
+    // that is necessarily different between them.
+    std::string instanceLabel() const {
+        return cfg_.label + " " + std::to_string(nodePort_);
+    }
+    // ... and for the stream resources, what is loaded as well, since that is
+    // what someone is actually picking between. Safe to put in a label: labels
+    // may change over a resource's life, which is exactly why the format is here
+    // and not in the seed. See mintIds().
+    std::string streamLabel(const SenderTransport& t) const {
+        const std::string f = shortFormat(t.formatText);
+        return f.empty() ? instanceLabel() : instanceLabel() + " - " + f;
+    }
+
     // ---- resources --------------------------------------------------------
     Json nodeResource() const;
     Json deviceResource() const;
@@ -178,6 +205,11 @@ private:
     std::string   lastActivation_;
     std::string   mdnsRejection_;
     std::string   hostLabel_;
+    // The port actually bound, which is what the labels, the seed and the
+    // published hrefs all have to agree on. Not necessarily cfg_.nodePort: a
+    // second instance on the same machine gets the next free one.
+    std::uint16_t nodePort_ = 0;
+    std::uint16_t requestedPort_ = 0;
 
     // IS-05 state. `staged_` is what a controller has PATCHed but not yet
     // activated; on activation it is pushed into the engine and cleared.
@@ -192,10 +224,25 @@ private:
 
 // ---- identity ---------------------------------------------------------------
 
+// Resource identity. Deterministic, so it survives a restart and a controller's
+// existing route still points at something that exists.
+//
+// The node port is part of the seed once it is not the default, which is what
+// makes a second instance on the same machine a genuinely different node rather
+// than a duplicate of the first. Only once it is not the default: an instance on
+// 3210 keeps exactly the UUIDs it had before this was introduced, so upgrading
+// does not orphan a route that already works.
+//
+// The loaded format is deliberately NOT in the seed, although it is in the
+// label. A UUID is an identity and has to outlive the thing it identifies
+// changing -- folding the format in would mint a brand new node, device, source,
+// flow and sender every time a different capture was loaded, and every route a
+// controller had made would break. Labels are free to change; identities are not.
 void BuiltinNode::mintIds() {
     hostLabel_ = localHostLabel();
-    const std::string seed =
-        cfg_.seed.empty() ? (hostLabel_ + "/PCAP Replay") : cfg_.seed;
+    std::string seed = cfg_.seed.empty() ? (hostLabel_ + "/PCAP Replay") : cfg_.seed;
+    if (cfg_.seed.empty() && nodePort_ != 0 && nodePort_ != kDefaultNodePort)
+        seed += "/" + std::to_string(nodePort_);
     nodeId_   = resourceId(seed, "node");
     deviceId_ = resourceId(seed, "device");
     sourceId_ = resourceId(seed, "source");
@@ -249,7 +296,7 @@ Json BuiltinNode::nodeResource() const {
     Json j = Json::object();
     j["id"]          = Json(nodeId_);
     j["version"]     = Json(version_);
-    j["label"]       = Json(cfg_.label);
+    j["label"]       = Json(instanceLabel());
     j["description"] = Json(cfg_.description);
     j["tags"]        = Json::object();
     j["href"]        = Json(joinUrl(host, port, "/"));
@@ -280,7 +327,7 @@ Json BuiltinNode::deviceResource() const {
     Json j = Json::object();
     j["id"]          = Json(deviceId_);
     j["version"]     = Json(version_);
-    j["label"]       = Json(cfg_.label);
+    j["label"]       = Json(instanceLabel());
     j["description"] = Json(cfg_.description);
     j["tags"]        = Json::object();
     j["type"]        = Json("urn:x-nmos:device:generic");
@@ -300,7 +347,7 @@ Json BuiltinNode::sourceResource() const {
     Json j = Json::object();
     j["id"]          = Json(sourceId_);
     j["version"]     = Json(version_);
-    j["label"]       = Json(cfg_.label + " source");
+    j["label"]       = Json(streamLabel(t) + " source");
     j["description"] = Json(t.formatText.empty() ? cfg_.description : t.formatText);
     j["tags"]        = Json::object();
     j["caps"]        = Json::object();
@@ -323,7 +370,7 @@ Json BuiltinNode::flowResource() const {
     Json j = Json::object();
     j["id"]          = Json(flowId_);
     j["version"]     = Json(version_);
-    j["label"]       = Json(cfg_.label + " flow");
+    j["label"]       = Json(streamLabel(t) + " flow");
     j["description"] = Json(t.formatText.empty() ? cfg_.description : t.formatText);
     j["tags"]        = Json::object();
     j["source_id"]   = Json(sourceId_);
@@ -357,7 +404,9 @@ Json BuiltinNode::senderResource() const {
     Json j = Json::object();
     j["id"]            = Json(senderId_);
     j["version"]       = Json(version_);
-    j["label"]         = Json(cfg_.label);
+    // The one a controller routes from, so it carries both discriminators: which
+    // instance, and what it is playing.
+    j["label"]         = Json(streamLabel(t));
     j["description"]   = Json(t.formatText.empty() ? cfg_.description : t.formatText);
     j["tags"]          = Json::object();
     j["flow_id"]       = Json(flowId_);
@@ -394,7 +443,7 @@ std::string BuiltinNode::sdp() const {
 
     line("v=0");
     line("o=- " + sessionId + " " + sessionVer + " IN IP4 " + originIp);
-    line("s=" + cfg_.label);
+    line("s=" + streamLabel(t));
     if (!t.formatText.empty()) line("i=" + t.formatText);
     line("t=0 0");
 
@@ -1078,6 +1127,22 @@ bool BuiltinNode::start(const NmosConfig& cfg) {
         everHeartbeat_ = false;
         state_ = "starting";
     }
+
+    // Find a port before minting anything, because the identity depends on it.
+    //
+    // Nothing in IS-04 requires 3210 -- it is a convention, and the node's own
+    // href and the DNS-SD advertisement both carry whatever was actually bound,
+    // so a controller finds the node either way. That makes stepping to the next
+    // free port strictly better than refusing to start, which is what a second
+    // instance on one machine used to do.
+    requestedPort_ = cfg_.nodePort;
+    nodePort_ = cfg_.nodePort;
+    if (cfg_.nodePort != 0) {
+        const std::uint16_t free = firstFreePort(cfg_.nodeIp, cfg_.nodePort, 20);
+        if (free != 0) nodePort_ = free;
+        // If the whole span is taken, fall through on the requested port and let
+        // start() produce the real bind error rather than inventing one here.
+    }
     mintIds();
     const bool liveNow = transport().active;
     {
@@ -1091,11 +1156,25 @@ bool BuiltinNode::start(const NmosConfig& cfg) {
     }
 
     installRoutes();
-    if (!server_.start(cfg_.nodeIp, cfg_.nodePort)) {
+    if (!server_.start(cfg_.nodeIp, nodePort_)) {
         std::lock_guard<std::mutex> lk(mutex_);
         error_ = "node API: " + server_.error();
         state_ = "stopped";
         return false;
+    }
+    // Re-mint against the port that was actually bound. It can differ from the
+    // one probed for -- an ephemeral request, or another process taking the
+    // probed port in between -- and the identity has to follow the reality.
+    if (server_.port() != nodePort_) {
+        nodePort_ = server_.port();
+        mintIds();
+    }
+    if (requestedPort_ != 0 && nodePort_ != requestedPort_) {
+        std::lock_guard<std::mutex> lk(mutex_);
+        warning_ = "port " + std::to_string(requestedPort_) +
+                   " was already in use, so this instance took " +
+                   std::to_string(nodePort_) +
+                   " and has its own resource IDs";
     }
 
     if (cfg_.useMdns && cfg_.registryHost.empty()) {
@@ -1116,7 +1195,10 @@ bool BuiltinNode::start(const NmosConfig& cfg) {
             {"ver_slf",   "0"}, {"ver_src", "0"}, {"ver_flw", "0"},
             {"ver_dvc",   "0"}, {"ver_snd", "0"}, {"ver_rcv", "0"},
         };
-        const std::string label = cfg_.label + " " + hostLabel_;
+        // Carries the port too: DNS-SD instance names have to be unique on the
+        // segment, and two instances on one machine would otherwise collide and
+        // one of them would simply fail to advertise.
+        const std::string label = instanceLabel() + " " + hostLabel_;
         if (!advertiser_.start(label, "_nmos-node._tcp", server_.port(), txt,
                                cfg_.nodeIp)) {
             std::lock_guard<std::mutex> lk(mutex_);

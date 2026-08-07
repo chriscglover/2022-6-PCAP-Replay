@@ -127,6 +127,35 @@ void HttpServer::route(const std::string& method, const std::string& pattern,
     routes_.push_back(std::move(r));
 }
 
+std::uint16_t firstFreePort(const std::string& bindIp, std::uint16_t first, int span) {
+    for (int i = 0; i < span; ++i) {
+        const int candidate = int(first) + i;
+        if (candidate > 65535) break;
+
+        SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (s == INVALID_SOCKET) return 0;
+        const DWORD exclusive = 1;
+        setsockopt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+                   reinterpret_cast<const char*>(&exclusive), sizeof exclusive);
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port   = htons(std::uint16_t(candidate));
+        if (bindIp.empty() || bindIp == "0.0.0.0") {
+            addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        } else if (inet_pton(AF_INET, bindIp.c_str(), &addr.sin_addr) != 1) {
+            closesocket(s);
+            return 0;                       // a bad address will not improve
+        }
+
+        const bool ok = bind(s, reinterpret_cast<const sockaddr*>(&addr),
+                             sizeof addr) == 0;
+        closesocket(s);
+        if (ok) return std::uint16_t(candidate);
+    }
+    return 0;
+}
+
 bool HttpServer::start(const std::string& bindIp, std::uint16_t port) {
     stop();
     error_.clear();

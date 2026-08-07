@@ -137,4 +137,15 @@ HttpResult httpRequest(const std::string& host, std::uint16_t port,
 
 std::string urlDecode(const std::string& s);
 
+// First port at or above `first` that nothing else is listening on, or 0 if the
+// whole span is taken. Probed with the same SO_EXCLUSIVEADDRUSE the server binds
+// with, so "free" here means the same thing it will mean there.
+//
+// This is inherently a hint: another process can take the port between the probe
+// and the bind. The caller still has to handle start() failing -- it just will
+// not fail for the ordinary reason, which is another copy of this app already
+// running on the same machine.
+std::uint16_t firstFreePort(const std::string& bindIp, std::uint16_t first,
+                            int span = 20);
+
 }  // namespace pcapreplay::nmos

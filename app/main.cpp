@@ -58,6 +58,10 @@ struct App {
     std::mutex    controlMutex;
     ReplayConfig  cfg;
     int           frameRateNum = 25, frameRateDen = 1;
+    // Format of the selected capture, learnt at probe time. The engine only
+    // reports one while it is running, and the NMOS label wants to say what is
+    // loaded from the moment it is picked, not from the moment it is playing.
+    std::string   probedFormat;
     // Read by the stats server thread, which must not reach into the dialog for
     // it -- a cross-thread SendMessage to a UI thread busy inside an IS-05
     // activation would deadlock the pair.
@@ -196,7 +200,7 @@ nmos::SenderTransport queryTransport(App& app) {
     t.macB           = ifaceMacFor(app, c.pathB.interfaceIp);
     t.frameRateNum = app.frameRateNum;
     t.frameRateDen = app.frameRateDen;
-    t.formatText   = app.engine.status().formatText;
+    t.formatText   = live ? app.engine.status().formatText : app.probedFormat;
     return t;
 }
 
@@ -304,7 +308,11 @@ void describeFiles(HWND dlg, App& app) {
         const SdiFormatInfo& fi = formatInfo(p.format);
         app.frameRateNum = fi.frameRateNum;
         app.frameRateDen = fi.frameRateDen;
+        app.probedFormat = p.formatText;
     }
+    // The NMOS labels carry the format, so a new capture is a resource change a
+    // registry should hear about rather than discover at the next restart.
+    app.nmos->notifyChanged();
 
     const SdiFormatInfo& fi = formatInfo(p.format);
     const int ring = GetDlgItemInt(dlg, IDC_RING, nullptr, FALSE);
@@ -760,16 +768,26 @@ INT_PTR CALLBACK dlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         // The scraped page carries the NMOS block too, so a report gathered from
         // a machine nobody is sitting at still says whether the node registered
         // and with which registry.
-        app->stats.start(kReplayStatsPort, [app] {
+        // Step to the next free port, for the same reason the NMOS node does: a
+        // second instance on this machine should still get a stats page rather
+        // than losing its only scriptable surface to the first one.
+        auto provider = [app] {
             return statusText(app->engine.status()) +
                    "\r\n-- nmos --------------------------------------------\r\n" +
                    nmosText(app->nmos->status(),
                             app->nmosEnabled.load(std::memory_order_relaxed));
-        });
+        };
+        std::uint16_t statsPort = kReplayStatsPort;
+        for (int i = 0; i < 20; ++i) {
+            if (app->stats.start(std::uint16_t(kReplayStatsPort + i), provider)) {
+                statsPort = std::uint16_t(kReplayStatsPort + i);
+                break;
+            }
+        }
         setText(dlg, IDC_STATSURL,
                 app->stats.running()
                     ? "Live stats: http://127.0.0.1:" +
-                          std::to_string(kReplayStatsPort) + "/"
+                          std::to_string(statsPort) + "/"
                     : "Stats server unavailable: " + app->stats.error());
 
         SetTimer(dlg, kTimerStatus, 250, nullptr);
