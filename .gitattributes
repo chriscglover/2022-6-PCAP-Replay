@@ -1,0 +1,18 @@
+# Normalise to LF in the repository. The sources are written with LF and this
+# keeps them that way, so a checkout on another machine does not come back as a
+# whole-file diff.
+* text=auto eol=lf
+
+# Visual Studio rewrites these with CRLF regardless, so do not fight it.
+*.sln       text eol=crlf
+*.vcxproj   text eol=crlf
+*.props     text eol=crlf
+
+# Never touched, and never committed either -- belt and braces in case one is
+# ever forced in with -f.
+*.pcap      binary
+*.pcapng    binary
+*.sdi       binary
+*.wav       binary
+*.png       binary
+*.ico       binary

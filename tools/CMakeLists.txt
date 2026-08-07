@@ -1,0 +1,2 @@
+add_executable(replay_cli replay_cli.cpp)
+target_link_libraries(replay_cli PRIVATE pcapreplay_common pcapreplay_nmos)

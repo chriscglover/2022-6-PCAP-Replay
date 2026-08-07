@@ -1,0 +1,61 @@
+// A tiny localhost stats endpoint.
+//
+// The app exposes its live counters over HTTP on 127.0.0.1 so they can be read
+// by anything -- a browser, curl, a script -- without transcribing numbers out
+// of a dialog box. Bound to loopback only; this is a diagnostic surface, not a
+// network service.
+//
+//   replay   http://127.0.0.1:49610/
+//
+// 49610, not the 49603 the NDI2022-6 replay used: that rig is routinely running
+// on the same machine as this one and the two would fight over the port.
+//
+// Note this is NOT the NMOS HTTP server: that one has to be reachable from the
+// registry and from controllers, so it binds a real interface and lives in
+// nmos/http_server.h. Keeping the two separate keeps the diagnostic surface
+// local even when the NMOS node is exposed.
+#pragma once
+
+#include <cstdint>
+#include <functional>
+#include <string>
+#include <thread>
+
+namespace pcapreplay {
+
+inline constexpr std::uint16_t kReplayStatsPort = 49610;   // http://127.0.0.1:49610/
+
+class StatsServer {
+public:
+    StatsServer() = default;
+    ~StatsServer();
+    StatsServer(const StatsServer&) = delete;
+    StatsServer& operator=(const StatsServer&) = delete;
+
+    // `provider` is called on the server thread for each request. It must be
+    // safe to call concurrently with the rest of the application.
+    //
+    // `bindAddress` defaults to loopback. Binding all interfaces ("0.0.0.0")
+    // makes an unsigned, freshly-built executable into a network listener,
+    // which Windows Defender's ML classifier flags as malware -- it quarantined
+    // this very binary. It is also simply better practice for a diagnostic
+    // surface to be local unless someone asks otherwise.
+    bool start(std::uint16_t port,
+               std::function<std::string()> provider,
+               const std::string& bindAddress = "127.0.0.1");
+    void stop();
+
+    bool running() const { return running_; }
+    const std::string& error() const { return error_; }
+
+private:
+    void serve();
+
+    std::uintptr_t sock_ = ~0ull;
+    std::thread    thread_;
+    std::function<std::string()> provider_;
+    volatile bool  running_ = false;
+    std::string    error_;
+};
+
+}  // namespace pcapreplay

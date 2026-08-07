@@ -1,0 +1,144 @@
+#include <windows.h>
+#include "resource.h"
+
+IDD_REPLAY DIALOGEX 0, 0, 620, 428
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
+CAPTION "PCAP Replay  -  ST 2022-6/-7 source with NMOS"
+FONT 8, "Segoe UI", 400, 0, 0x0
+BEGIN
+    // ---- Source ----------------------------------------------------------
+    GROUPBOX        "Source capture", -1, 7, 4, 296, 106
+
+    LTEXT           "Red pcap", -1, 14, 19, 40, 8
+    EDITTEXT        IDC_RED, 56, 17, 192, 12, ES_AUTOHSCROLL
+    PUSHBUTTON      "Browse...", IDC_RED_BROWSE, 252, 17, 44, 12
+
+    LTEXT           "Blue pcap", -1, 14, 35, 40, 8
+    EDITTEXT        IDC_BLUE, 56, 33, 192, 12, ES_AUTOHSCROLL
+    PUSHBUTTON      "Browse...", IDC_BLUE_BROWSE, 252, 33, 44, 12
+
+    LTEXT           "", IDC_FILEINFO, 14, 50, 282, 26
+
+    LTEXT           "Ring buffer", -1, 14, 82, 42, 8
+    EDITTEXT        IDC_RING, 58, 80, 28, 12, ES_NUMBER
+    LTEXT           "frames", -1, 89, 82, 26, 8
+    LTEXT           "Skip after", -1, 122, 82, 36, 8
+    EDITTEXT        IDC_SKIP, 160, 80, 28, 12, ES_NUMBER
+    LTEXT           "bad frames, then loop", -1, 191, 82, 76, 8
+
+    // ---- Transmit --------------------------------------------------------
+    GROUPBOX        "Transmit", -1, 7, 114, 296, 118
+
+    CONTROL         "ST 2022-6", IDC_MODE_6, "Button",
+                    BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 14, 127, 56, 10
+    CONTROL         "ST 2022-7  (two paths)", IDC_MODE_7, "Button",
+                    BS_AUTORADIOBUTTON, 74, 127, 96, 10
+
+    LTEXT           "Path A", -1, 14, 144, 26, 8
+    EDITTEXT        IDC_A_GROUP, 44, 142, 62, 12, ES_AUTOHSCROLL
+    EDITTEXT        IDC_A_PORT, 110, 142, 30, 12, ES_NUMBER
+    COMBOBOX        IDC_A_IFACE, 144, 142, 152, 90,
+                    CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+
+    LTEXT           "Path B", -1, 14, 160, 26, 8
+    EDITTEXT        IDC_B_GROUP, 44, 158, 62, 12, ES_AUTOHSCROLL
+    EDITTEXT        IDC_B_PORT, 110, 158, 30, 12, ES_NUMBER
+    COMBOBOX        IDC_B_IFACE, 144, 158, 152, 90,
+                    CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+
+    LTEXT           "TTL", -1, 14, 178, 16, 8
+    EDITTEXT        IDC_TTL, 32, 176, 24, 12, ES_NUMBER
+    CONTROL         "Loopback", IDC_LOOPBACK, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 62, 177, 48, 10
+    CONTROL         "Rewrite timecode", IDC_TIMECODE, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 116, 177, 74, 10
+
+    LTEXT           "Stop after", -1, 14, 196, 36, 8
+    EDITTEXT        IDC_DURATION, 52, 194, 36, 12, ES_NUMBER
+    LTEXT           "seconds   (0 = run until stopped)", -1, 92, 196, 116, 8
+
+    // ---- Faults ----------------------------------------------------------
+    GROUPBOX        "Fault injection", -1, 7, 236, 296, 62
+
+    CONTROL         "Loss on A", IDC_F_LOSS_A, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 250, 54, 10
+    CONTROL         "Loss on B", IDC_F_LOSS_B, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 74, 250, 54, 10
+    CONTROL         "Burst loss", IDC_F_BURST, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 134, 250, 54, 10
+    CONTROL         "Reorder", IDC_F_REORDER, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 194, 250, 50, 10
+    CONTROL         "Duplicate", IDC_F_DUP, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 266, 54, 10
+    CONTROL         "Seq jumps", IDC_F_SEQJUMP, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 74, 266, 54, 10
+    LTEXT           "Rate %", -1, 134, 268, 26, 8
+    EDITTEXT        IDC_F_RATE, 162, 266, 30, 12, ES_AUTOHSCROLL
+
+    // ---- Run -------------------------------------------------------------
+    DEFPUSHBUTTON   "Start", IDC_START, 7, 306, 80, 20
+    LTEXT           "Idle", IDC_SUMMARY, 95, 312, 208, 10
+    LTEXT           "", IDC_STATSURL, 7, 332, 296, 10
+
+    // ---- NMOS ------------------------------------------------------------
+    GROUPBOX        "NMOS", -1, 310, 4, 303, 152
+
+    CONTROL         "Register this replay as an NMOS sender", IDC_NMOS_EN,
+                    "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 317, 17, 160, 10
+
+    LTEXT           "Label", -1, 317, 34, 24, 8
+    EDITTEXT        IDC_NMOS_LABEL, 344, 32, 128, 12, ES_AUTOHSCROLL
+    LTEXT           "Port", -1, 478, 34, 18, 8
+    EDITTEXT        IDC_NMOS_PORT, 498, 32, 38, 12, ES_NUMBER
+
+    LTEXT           "Node NIC", -1, 317, 50, 34, 8
+    COMBOBOX        IDC_NMOS_IFACE, 354, 48, 252, 90,
+                    CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+
+    CONTROL         "Discover registry via mDNS", IDC_NMOS_MDNS, "Button",
+                    BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 317, 66, 118, 10
+    CONTROL         "Use host and port below", IDC_NMOS_MANUAL, "Button",
+                    BS_AUTORADIOBUTTON, 441, 66, 110, 10
+
+    LTEXT           "Registry", -1, 317, 84, 30, 8
+    EDITTEXT        IDC_NMOS_HOST, 350, 82, 148, 12, ES_AUTOHSCROLL
+    EDITTEXT        IDC_NMOS_RPORT, 502, 82, 38, 12, ES_NUMBER
+
+    CONTROL         "Also advertise for peer-to-peer (no registry needed)",
+                    IDC_NMOS_P2P, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 317, 100, 200, 10
+
+    EDITTEXT        IDC_NMOS_STATUS, 317, 114, 290, 38,
+                    ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL |
+                    WS_VSCROLL | NOT WS_TABSTOP
+
+    // ---- Status ----------------------------------------------------------
+    GROUPBOX        "Status", -1, 310, 160, 303, 262
+    EDITTEXT        IDC_STATUS, 317, 172, 290, 244,
+                    ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL |
+                    WS_VSCROLL | NOT WS_TABSTOP
+END
+
+1 VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080904b0"
+        BEGIN
+            VALUE "FileDescription", "PCAP Replay - ST 2022-6/-7 source with NMOS"
+            VALUE "FileVersion",     "1.0.0.0"
+            VALUE "InternalName",    "pcap_replay"
+            VALUE "OriginalFilename","pcap_replay.exe"
+            VALUE "ProductName",     "PCAP Replay"
+            VALUE "ProductVersion",  "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x809, 1200
+    END
+END

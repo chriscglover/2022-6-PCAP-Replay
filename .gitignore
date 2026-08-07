@@ -1,0 +1,21 @@
+build/
+out/
+.vs/
+*.user
+Thumbs.db
+
+# Captured media and anything derived from it. These hold off-air broadcast
+# content, so they never go near the repository.
+*.pcap
+*.pcapng
+*.sdi
+*.wav
+
+# Reference NMOS dumps are captures of real broadcast nodes: they carry the
+# operator's node and resource identifiers, multicast plan, interface addressing
+# and MAC addresses. Kept locally for conformance checking, never committed.
+# There is a second copy of this rule in docs/reference/.gitignore so it travels
+# with the folder.
+docs/**/nmos_capture_*/
+docs/**/nmos_capture*
+**/nmos_capture_*/

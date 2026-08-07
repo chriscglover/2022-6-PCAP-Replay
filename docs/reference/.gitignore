@@ -1,0 +1,20 @@
+# Dumps of real NMOS nodes captured for conformance checking.
+#
+# These carry a real broadcaster's node and resource identifiers, their
+# multicast plan, interface addressing and MAC addresses. They are kept locally
+# because diffing our IS-04/IS-05 output against working third-party kit is the
+# only reliable way to catch conformance defects -- but none of it goes into the
+# repository.
+#
+# This file lives beside the captures rather than only in the root .gitignore so
+# the rule travels with the folder if it is ever moved or copied.
+nmos_capture_*/
+nmos_capture*
+
+# Anything else dumped alongside them.
+*.sdp
+*.json
+
+# The dump script itself is ours and is worth keeping.
+!nmosdump.py
+!.gitignore
