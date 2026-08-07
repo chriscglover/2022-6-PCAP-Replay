@@ -170,10 +170,14 @@ exactly the IDs it had before and an existing route is not orphaned by upgrading
 | Node API | `:3210` | `:3211` |
 | Stats | `:49610` | `:49611` |
 | Sender UUID | unchanged from before | its own |
-| Label | `PCAP Replay 3210 - 1080i25` | `PCAP Replay 3211 - 625i25` |
+| Label | `PCAP Replay EDIT-1:3210 - 1080i25` | `PCAP Replay EDIT-1:3211 - 625i25` |
 
-Labels carry the port **and** the loaded format, because that is what someone is
-choosing between in a controller. The format is deliberately *not* in the UUID
+Labels carry the host and port **and** the loaded format, because that is what
+someone is choosing between in a controller. The host matters as much as the
+port: every machine hands out 3210 first, so two hosts each running one instance
+would otherwise present two senders with the same name. The UUIDs were never at
+risk there — the machine name has always been in the seed — but a registry full
+of identically named senders is its own kind of unusable. The format is deliberately *not* in the UUID
 seed: a UUID is an identity and has to outlive the thing it identifies changing,
 so folding the format in would mint a whole new node, device, source, flow and
 sender every time a different capture was loaded, and break every route a

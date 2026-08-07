@@ -117,11 +117,20 @@ private:
         if (!stagedValid_) stagedMasterEnable_ = live;
     }
 
-    // What a controller shows in its list. Two instances on one machine have to
-    // be tellable apart at a glance, so the port goes in -- it is the one thing
-    // that is necessarily different between them.
+    // What a controller shows in its list, and the only thing distinguishing one
+    // of these from another on screen -- so it has to carry both axes along which
+    // instances multiply. The port tells two copies on one machine apart; the
+    // host tells copies on different machines apart, which the port alone cannot
+    // because each machine hands out 3210 first.
+    //
+    // The UUIDs were never at risk across hosts -- the machine name has always
+    // been in the seed -- but a registry full of identically named senders is its
+    // own kind of unusable.
+    //
+    // host:port rather than "host port": it is the familiar idiom for an
+    // endpoint, and it reads as one token rather than two loose words.
     std::string instanceLabel() const {
-        return cfg_.label + " " + std::to_string(nodePort_);
+        return cfg_.label + " " + hostLabel_ + ":" + std::to_string(nodePort_);
     }
     // ... and for the stream resources, what is loaded as well, since that is
     // what someone is actually picking between. Safe to put in a label: labels
@@ -1195,10 +1204,10 @@ bool BuiltinNode::start(const NmosConfig& cfg) {
             {"ver_slf",   "0"}, {"ver_src", "0"}, {"ver_flw", "0"},
             {"ver_dvc",   "0"}, {"ver_snd", "0"}, {"ver_rcv", "0"},
         };
-        // Carries the port too: DNS-SD instance names have to be unique on the
-        // segment, and two instances on one machine would otherwise collide and
-        // one of them would simply fail to advertise.
-        const std::string label = instanceLabel() + " " + hostLabel_;
+        // instanceLabel() already carries host and port, which is exactly what
+        // DNS-SD needs: instance names have to be unique on the segment, and two
+        // copies sharing one would leave the loser silently unadvertised.
+        const std::string label = instanceLabel();
         if (!advertiser_.start(label, "_nmos-node._tcp", server_.port(), txt,
                                cfg_.nodeIp)) {
             std::lock_guard<std::mutex> lk(mutex_);
