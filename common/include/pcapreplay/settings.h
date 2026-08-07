@@ -3,7 +3,7 @@
 // Backed by the Win32 profile API, so there is no dependency and no parser to
 // get wrong. Writes are immediate.
 //
-//   %APPDATA%\pcapreplay-6\<app>.ini
+//   %APPDATA%\PCAP Replay\<app>.ini
 #pragma once
 
 #include <string>

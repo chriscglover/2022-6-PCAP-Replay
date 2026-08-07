@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -35,6 +36,7 @@
 #include "pcapreplay/replay_engine.h"
 #include "pcapreplay/settings.h"
 #include "pcapreplay/stats_server.h"
+#include "pcapreplay/nmos/http.h"
 #include "pcapreplay/nmos/nmos_node.h"
 #include "resource.h"
 
@@ -44,11 +46,112 @@ namespace {
 
 constexpr UINT_PTR kTimerStatus = 1;
 
+// ---- instance slot ---------------------------------------------------------
+//
+// Everything that has to differ between two copies on one machine -- the node
+// API port, the stats port and the settings file -- comes from a single slot
+// number, so the three cannot drift apart. Slot 0 is the first instance and
+// keeps the file and the ports it has always had, so nothing about an existing
+// single-instance install changes.
+//
+// There is a chicken and egg in keying settings by the node port: the configured
+// port lives in settings. It is broken by reading the *base* port from the
+// shared store -- the port every instance starts probing from, which is by
+// definition the same value for all of them -- and only then opening the real
+// store, keyed on where this instance actually landed.
+//
+// A slot is claimed only when both its ports are free. Keying on the node port
+// alone would drop two instances into the same settings file whenever the first
+// had NMOS switched off and so never bound one.
+constexpr std::uint16_t kDefaultNodePort = 3210;
+
+struct InstanceSlot {
+    int           index = 0;
+    std::uint16_t nodePort  = kDefaultNodePort;
+    std::uint16_t statsPort = kReplayStatsPort;
+    std::string   settingsName = "replay";
+};
+
+InstanceSlot resolveInstanceSlot() {
+    // The shared store, read for one value only: where to start probing.
+    const Settings shared{"replay"};
+    const int configured = shared.getInt("nmos_port", kDefaultNodePort);
+    const std::uint16_t base =
+        (configured > 0 && configured < 65536) ? std::uint16_t(configured)
+                                               : kDefaultNodePort;
+
+    InstanceSlot slot;
+    for (int i = 0; i < 20; ++i) {
+        const int node  = int(base) + i;
+        const int stats = int(kReplayStatsPort) + i;
+        if (node > 65535 || stats > 65535) break;
+        // span 1 asks "is this exact port free", not "find me one near it".
+        if (nmos::firstFreePort({}, std::uint16_t(node), 1) == 0) continue;
+        if (nmos::firstFreePort("127.0.0.1", std::uint16_t(stats), 1) == 0) continue;
+
+        slot.index     = i;
+        slot.nodePort  = std::uint16_t(node);
+        slot.statsPort = std::uint16_t(stats);
+        slot.settingsName = i == 0 ? "replay" : ("replay-" + std::to_string(node));
+        return slot;
+    }
+    // Every slot taken. Fall back to the first and let the individual servers
+    // report their own bind failures rather than inventing one here.
+    slot.nodePort  = base;
+    slot.statsPort = kReplayStatsPort;
+    return slot;
+}
+
+// The settings a given instance sees.
+//
+// Writes always go to this instance's own file, which is the whole point: two
+// copies must not overwrite each other's remembered paths and ports.
+//
+// Reads fall through to the first instance's file when this one has no answer,
+// which matters as much. A second instance opening completely blank -- no
+// capture, no NIC, NMOS switched off -- is not a useful second instance; you
+// almost always want another copy of roughly the same thing. Inheriting the
+// defaults and then diverging on whatever you change is the behaviour that makes
+// a second instance worth starting.
+class InstanceSettings {
+public:
+    InstanceSettings(const std::string& name, bool inherit) : own_(name) {
+        if (inherit) base_.emplace("replay");
+    }
+
+    std::string getString(const char* k, const std::string& fb) const {
+        return base_ ? own_.getString(k, base_->getString(k, fb))
+                     : own_.getString(k, fb);
+    }
+    int getInt(const char* k, int fb) const {
+        return base_ ? own_.getInt(k, base_->getInt(k, fb)) : own_.getInt(k, fb);
+    }
+    bool getBool(const char* k, bool fb) const { return getInt(k, fb ? 1 : 0) != 0; }
+
+    // For the few values that must not be inherited because they are what makes
+    // this instance distinct -- inheriting the node port would have every copy
+    // trying to bind the first one's.
+    int getIntOwn(const char* k, int fb) const { return own_.getInt(k, fb); }
+
+    void setString(const char* k, const std::string& v) { own_.setString(k, v); }
+    void setInt(const char* k, int v)                   { own_.setInt(k, v); }
+    void setBool(const char* k, bool v)                 { own_.setBool(k, v); }
+
+    const std::string& path() const { return own_.path(); }
+
+private:
+    Settings                own_;
+    std::optional<Settings> base_;   // engaged only for instances after the first
+};
+
 struct App {
     WinsockScope  winsock;
     ReplayEngine  engine;
     StatsServer   stats;
-    Settings      settings{"replay"};
+    // Opened once the instance slot is known, so two copies on one machine do
+    // not overwrite each other's remembered paths and ports. See InstanceSlot.
+    std::optional<InstanceSettings> settings;
+    InstanceSlot  slot;
     std::vector<NetInterface> interfaces;
 
     std::unique_ptr<nmos::NmosBackend> nmos{nmos::createBuiltinBackend()};
@@ -458,7 +561,8 @@ nmos::NmosConfig nmosConfigFrom(HWND dlg, App& app) {
 }
 
 void saveSettings(HWND dlg, App& app, const ReplayConfig& cfg) {
-    auto& st = app.settings;
+    if (!app.settings) return;
+    auto& st = *app.settings;
     st.setString("red",      cfg.fileRed);
     st.setString("blue",     cfg.fileBlue);
     st.setInt   ("ring",     cfg.ringFrames);
@@ -725,7 +829,18 @@ INT_PTR CALLBACK dlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
                                   "  -  ST 2022-6/-7 source with NMOS").c_str());
 
         fillInterfaces(dlg, *app);
-        auto& st = app->settings;
+
+        // Which instance this is, and therefore which settings file, which node
+        // port and which stats port. Must happen before anything is read.
+        const InstanceSlot slot = resolveInstanceSlot();
+        app->slot = slot;
+        app->settings.emplace(slot.settingsName, slot.index != 0);
+        if (slot.index != 0)
+            SetWindowTextW(dlg, widen(APP_NAME " " APP_VERSION_STR
+                                      "  -  instance " + std::to_string(slot.index + 1) +
+                                      "  -  ST 2022-6/-7 source with NMOS").c_str());
+
+        auto& st = *app->settings;
         setText(dlg, IDC_RED,  st.getString("red", ""));
         setText(dlg, IDC_BLUE, st.getString("blue", ""));
         SetDlgItemInt(dlg, IDC_RING, UINT(st.getInt("ring", 16)), FALSE);
@@ -747,7 +862,11 @@ INT_PTR CALLBACK dlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
 
         check(dlg, IDC_NMOS_EN, st.getBool("nmos", false));
         setText(dlg, IDC_NMOS_LABEL, st.getString("nmos_label", "PCAP Replay"));
-        SetDlgItemInt(dlg, IDC_NMOS_PORT, UINT(st.getInt("nmos_port", 3210)), FALSE);
+        // Not inherited: this is the value that makes the instance distinct, so
+        // a second copy opens on 3211 rather than on the first one's 3210, which
+        // it would immediately have to move off anyway.
+        SetDlgItemInt(dlg, IDC_NMOS_PORT,
+                      UINT(st.getIntOwn("nmos_port", slot.nodePort)), FALSE);
         selectIface(dlg, *app, IDC_NMOS_IFACE, st.getString("nmos_iface", ""));
         const bool useMdns = st.getBool("nmos_mdns", true);
         check(dlg, useMdns ? IDC_NMOS_MDNS : IDC_NMOS_MANUAL, true);
@@ -777,12 +896,10 @@ INT_PTR CALLBACK dlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
                    nmosText(app->nmos->status(),
                             app->nmosEnabled.load(std::memory_order_relaxed));
         };
-        std::uint16_t statsPort = kReplayStatsPort;
+        std::uint16_t statsPort = app->slot.statsPort;
         for (int i = 0; i < 20; ++i) {
-            if (app->stats.start(std::uint16_t(kReplayStatsPort + i), provider)) {
-                statsPort = std::uint16_t(kReplayStatsPort + i);
-                break;
-            }
+            const auto p = std::uint16_t(app->slot.statsPort + i);
+            if (app->stats.start(p, provider)) { statsPort = p; break; }
         }
         setText(dlg, IDC_STATSURL,
                 app->stats.running()

@@ -171,8 +171,21 @@ exactly the IDs it had before and an existing route is not orphaned by upgrading
 |---|---|---|
 | Node API | `:3210` | `:3211` |
 | Stats | `:49610` | `:49611` |
+| Settings | `replay.ini` | `replay-3211.ini` |
 | Sender UUID | unchanged from before | its own |
 | Label | `PCAP Replay EDIT-1:3210 - 1080i25` | `PCAP Replay EDIT-1:3211 - 625i25` |
+
+All three come from one slot number, so they cannot drift apart. A slot is claimed
+only when *both* its ports are free — keying on the node port alone would drop two
+instances into the same settings file whenever the first had NMOS switched off and
+so never bound one.
+
+Settings **write** to the instance's own file and **read** through to the first
+instance's when it has no answer of its own. A second instance that opened blank —
+no capture, no NIC, NMOS off — would not be a useful second instance; inheriting
+and then diverging on whatever you change is what makes starting one worthwhile.
+The node port is the exception and is never inherited, since it is the thing that
+makes the instance distinct.
 
 Labels carry the host and port **and** the loaded format, because that is what
 someone is choosing between in a controller. The host matters as much as the
