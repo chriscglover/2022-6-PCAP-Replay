@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(PCAP_Replay
-        VERSION 1.2.0
+        VERSION 1.3.0
         DESCRIPTION "ST 2022-6/-7 replay from packet capture, with NMOS IS-04/IS-05"
         LANGUAGES CXX)
 

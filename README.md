@@ -70,7 +70,7 @@ routed by a controller to a hardware ST 2022-6 receiver, and decoded.
 | SDP manifest, incl. `a=group:DUP` for the -7 pair | ✅ Proven — accepted by a hardware receiver |
 | mDNS registry discovery | ✅ Proven — found and registered with a live registry over mDNS. `replay_cli --discover` checks your own segment |
 | Peer-to-peer advertisement | ⚠️ Advertised and unique per instance; not exercised with a controller and no registry present |
-| Two or more instances on one machine | ✅ Proven — distinct ports, UUIDs and labels, both registered at once |
+| Two or more instances on one machine | ✅ Proven — distinct ports, UUIDs, labels and settings files, both registered at once |
 | Scheduled IS-05 activation | ❌ Returns 501; only `activate_immediate` |
 | Long-run registry garbage-collection recovery | ⚠️ 404-triggered re-registration written, not yet exercised over hours |
 
