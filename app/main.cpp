@@ -461,10 +461,15 @@ void doStop(HWND dlg, App& app) {
 
 // ---- status text -----------------------------------------------------------
 
+// Prefixed to every status report, including the one served over HTTP, so a
+// scraped stats page identifies which build produced it.
+const std::string kBanner = APP_NAME " " APP_VERSION_STR "\r\n\r\n";
+
 std::string statusText(const ReplayStatus& s) {
     if (!s.running) {
-        if (s.completed) return "Finished: reached the configured duration.";
-        return s.error.empty() ? std::string("Idle") : ("Stopped: " + s.error);
+        if (s.completed) return kBanner + "Finished: reached the configured duration.";
+        return kBanner + (s.error.empty() ? std::string("Idle")
+                                          : ("Stopped: " + s.error));
     }
     const PcapSourceStatus& src = s.source;
     char buf[4096];
@@ -533,7 +538,7 @@ std::string statusText(const ReplayStatus& s) {
         commas(s.duplicated).c_str(),
         commas(s.seqJumps).c_str());
 
-    std::string out = buf;
+    std::string out = kBanner + buf;
     if (!s.warning.empty()) out += "\r\n!! " + s.warning + "\r\n";
     return out;
 }
@@ -573,6 +578,9 @@ INT_PTR CALLBACK dlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_INITDIALOG: {
         app = reinterpret_cast<App*>(lp);
         SetWindowLongPtrW(dlg, GWLP_USERDATA, lp);
+
+        SetWindowTextW(dlg, widen(APP_NAME " " APP_VERSION_STR
+                                  "  -  ST 2022-6/-7 source with NMOS").c_str());
 
         fillInterfaces(dlg, *app);
         auto& st = app->settings;

@@ -73,6 +73,7 @@ void printProbe(const PcapProbe& p) {
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::printf(
+            "PCAP Replay 1.0 - console driver\n\n"
             "usage: replay_cli <red.pcap> [blue.pcap] [options]\n"
             "  --probe  --ingest N  --sdp\n"
             "  --group A  --group-b B  --port N  --iface IP  --seconds N\n"

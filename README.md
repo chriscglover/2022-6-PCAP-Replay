@@ -21,6 +21,38 @@ and random impairments for exercising a receiver.
 
 Deployment is one `.exe`. No Conan, no vcpkg, no Bonjour SDK, no .NET, no GPU.
 
+## Requirements
+
+**To run: copy `pcap_replay.exe` and double-click it.** There is nothing to
+install.
+
+| | |
+|---|---|
+| Visual C++ Redistributable | **Not needed.** Linked against the static CRT (`/MT`), so there is no `VCRUNTIME140.dll` or `MSVCP140.dll` to ship. |
+| .NET | **Not needed.** Native C++ throughout. |
+| Bonjour / mDNSResponder | **Not needed.** DNS-SD uses the Windows API in `dnsapi.dll`, not Apple's SDK or service. |
+| NDI runtime | **Not needed.** Unlike the NDI2022-6 rig this came from, nothing here touches the NDI SDK. |
+| OS | Windows 10 version 1703 or later, x64. The floor is `DnsServiceBrowse`/`DnsServiceRegister`, which arrived in 1703. |
+| CPU | Any x64. AVX2 is used for the 10-bit packing hot loops but is probed at runtime with a scalar fallback, so it is not required. |
+| Disk | Fast enough to stream the capture. 1080i25 needs ~190 MB/s per leg, so ~380 MB/s for a `-7` pair. Any NVMe is comfortable; measure yours with `replay_cli --ingest`. |
+
+The only libraries linked are Windows SDK ones — `ws2_32`, `iphlpapi`, `winmm`,
+`dnsapi`, `comctl32` — all present on any Windows install. `dumpbin /dependents`
+on the shipped binary lists nothing else.
+
+**To build** you need Visual Studio 2022 or later with the C++ workload, and
+CMake 3.24+. Visual Studio's bundled CMake is sufficient. No package manager and
+no external SDK.
+
+Two things the app does need from the *network*, rather than the machine:
+
+- **A firewall allowance** if the NMOS node API is to be reachable. It binds a
+  real interface on port 3210 by default, and a registry or controller that
+  cannot reach it will list the sender but fail to route it.
+- **mDNS on the local segment** for registry autodiscovery. Plenty of networks
+  do not carry it between subnets, which is what the manual registry host and
+  port override is for.
+
 ## Status
 
 **Validated end to end against a real NMOS system**: a captured ST 2022-7 pair
