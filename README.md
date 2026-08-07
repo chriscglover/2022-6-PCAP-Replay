@@ -66,9 +66,11 @@ routed by a controller to a hardware ST 2022-6 receiver, and decoded.
 | Streaming ring buffer at line rate | ✅ Proven — 129 fps merged against 25 fps needed |
 | Loop, fresh RTP/HBRMT, timecode rewrite, fault injection | ✅ Carried over from NDI2022-6, unchanged |
 | IS-04 registration, heartbeat, Node API | ✅ Proven against a live registry |
-| IS-05 connection API, activation, destination change | ✅ Proven — routed by a controller |
+| IS-05 connection API, activation, destination change | ✅ Proven — routed by a controller, and a live destination change confirmed onto the wire |
 | SDP manifest, incl. `a=group:DUP` for the -7 pair | ✅ Proven — accepted by a hardware receiver |
-| mDNS registry discovery / peer-to-peer advertisement | ⚠️ Browses both registration service types; use `replay_cli --discover` to check your own segment |
+| mDNS registry discovery | ✅ Proven — found and registered with a live registry over mDNS. `replay_cli --discover` checks your own segment |
+| Peer-to-peer advertisement | ⚠️ Advertised and unique per instance; not exercised with a controller and no registry present |
+| Two or more instances on one machine | ✅ Proven — distinct ports, UUIDs and labels, both registered at once |
 | Scheduled IS-05 activation | ❌ Returns 501; only `activate_immediate` |
 | Long-run registry garbage-collection recovery | ⚠️ 404-triggered re-registration written, not yet exercised over hours |
 
