@@ -58,7 +58,20 @@ public:
     bool start(const NmosConfig& cfg) override;
     void stop() override;
     NmosStatus status() const override;
+    // The GUI's Start and Stop buttons reach IS-05 through here.
+    //
+    // Re-syncing master_enable is the point of it. IS-05 says a PATCH is a
+    // partial update of `staged`, so anything the body leaves out keeps its
+    // staged value -- which is right, and is what nmos-cpp does. It only works
+    // if `staged` tracks reality, and here reality can move without IS-05
+    // touching it: the GUI can start and stop the replay itself. Seeding these
+    // once at startup, when the engine has never run, left staged master_enable
+    // false for the life of the process. A controller that then PATCHed a new
+    // destination_ip and activated it -- without naming master_enable, because
+    // it was not changing it -- activated that stale false, and the node
+    // answered a request to move the sender by stopping it.
     void notifyChanged() override {
+        syncEnableFromEngine();
         bumpVersion();
         wake();
     }
@@ -78,6 +91,18 @@ private:
 
     SenderTransport transport() const {
         return query_ ? query_() : SenderTransport{};
+    }
+
+    // Point staged and active master_enable at whether the engine is actually
+    // transmitting. Call with no lock held: transport() calls back into the app.
+    void syncEnableFromEngine() {
+        const bool live = transport().active;
+        std::lock_guard<std::mutex> lk(is05Mutex_);
+        masterEnable_ = live;
+        // Only follow for the staged copy if nothing is staged and waiting. A
+        // controller that has PATCHed master_enable but not yet activated it is
+        // entitled to have that survive.
+        if (!stagedValid_) stagedMasterEnable_ = live;
     }
 
     // ---- resources --------------------------------------------------------
@@ -118,6 +143,10 @@ private:
         std::lock_guard<std::mutex> lk(mutex_);
         state_ = s;
     }
+    void setLastActivation(const std::string& s) {
+        std::lock_guard<std::mutex> lk(mutex_);
+        lastActivation_ = s;
+    }
 
     NmosConfig  cfg_;
     QueryFn     query_;
@@ -139,9 +168,15 @@ private:
     std::string error_, warning_;
     std::string registryHost_;
     std::uint16_t registryPort_ = 0;
+    std::string   registryDiscovery_;    // how registryHost_ was arrived at
+    std::string   registryServiceType_;  // the DNS-SD type it answered on
     bool          registered_ = false;
     bool          dirty_ = false;
     std::uint64_t heartbeats_ = 0, heartbeatFailures_ = 0;
+    Clock::time_point lastHeartbeatOk_{};
+    bool          everHeartbeat_ = false;
+    std::string   lastActivation_;
+    std::string   mdnsRejection_;
     std::string   hostLabel_;
 
     // IS-05 state. `staged_` is what a controller has PATCHed but not yet
@@ -687,7 +722,14 @@ void BuiltinNode::handleStagedPatch(const HttpRequest& req, HttpResponse& res) {
         enable     = stagedMasterEnable_;
         receiverId = stagedReceiverId_;
     }
-    if (!haveStaged) want = transport();
+    // With nothing staged, `staged` mirrors what is live -- including
+    // master_enable. Belt and braces against the desync notifyChanged() fixes:
+    // a PATCH that does not mention master_enable must never be able to turn a
+    // running sender off as a side effect of moving it.
+    if (!haveStaged) {
+        want = transport();
+        enable = want.active;
+    }
 
     if (body.has("master_enable")) enable = body.at("master_enable").asBool(enable);
 
@@ -757,13 +799,24 @@ void BuiltinNode::handleStagedPatch(const HttpRequest& req, HttpResponse& res) {
     }
 
     want.active = enable;
+
+    // What was asked for, recorded before the attempt, so the status window can
+    // show a failed activation rather than only a successful one.
+    std::string asked = std::string(enable ? "enable " : "disable ") +
+                        want.destIpA + ":" + std::to_string(want.destPortA);
+    if (want.redundant)
+        asked += " + " + want.destIpB + ":" + std::to_string(want.destPortB);
+
     std::string err;
     if (apply_ && !apply_(want, err)) {
+        setLastActivation(asked + "  -- REJECTED: " +
+                          (err.empty() ? std::string("could not apply") : err));
         const Json e = Json(err.empty() ? std::string("could not apply") : err);
         res.json(std::string(R"({"code":500,"error":)") + e.dump() +
                  R"(,"debug":null})", 500);
         return;
     }
+    setLastActivation(asked + "  -- applied");
 
     {
         std::lock_guard<std::mutex> lk(is05Mutex_);
@@ -797,15 +850,28 @@ bool BuiltinNode::discoverRegistry() {
         std::lock_guard<std::mutex> lk(mutex_);
         registryHost_ = cfg_.registryHost;
         registryPort_ = cfg_.registryPort ? cfg_.registryPort : 3210;
+        registryDiscovery_ = "manual override";
+        registryServiceType_.clear();
         return true;
     }
     if (!cfg_.useMdns) return false;
 
     MdnsService best;
-    if (!browser_.best(cfg_.registrationVersion, best)) return false;
+    if (!browser_.best(cfg_.registrationVersion, best)) {
+        // Something was advertised but cannot be used -- almost always an
+        // api_ver that does not list ours. Say which, rather than leaving the
+        // status on "looking for a registry" while one is plainly on the wire.
+        const std::string why = browser_.rejection(cfg_.registrationVersion);
+        std::lock_guard<std::mutex> lk(mutex_);
+        mdnsRejection_ = why;
+        return false;
+    }
     std::lock_guard<std::mutex> lk(mutex_);
+    mdnsRejection_.clear();
     registryHost_ = best.address.empty() ? best.hostName : best.address;
     registryPort_ = best.port;
+    registryDiscovery_ = "mDNS";
+    registryServiceType_ = best.serviceType;
     return !registryHost_.empty() && registryPort_ != 0;
 }
 
@@ -880,6 +946,8 @@ bool BuiltinNode::heartbeat() {
     std::lock_guard<std::mutex> lk(mutex_);
     if (r.ok && r.status == 200) {
         ++heartbeats_;
+        lastHeartbeatOk_ = Clock::now();
+        everHeartbeat_ = true;
         error_.clear();
         return true;
     }
@@ -931,10 +999,13 @@ void BuiltinNode::registrationLoop() {
                 std::lock_guard<std::mutex> lk(mutex_);
                 state_ = "registry " + registryHost_ + ":" +
                          std::to_string(registryPort_);
+            } else if (!cfg_.registryHost.empty()) {
+                setState("registry override set but unusable");
             } else {
-                setState(cfg_.registryHost.empty()
+                std::lock_guard<std::mutex> lk(mutex_);
+                state_ = mdnsRejection_.empty()
                              ? "looking for a registry over mDNS"
-                             : "registry override set but unusable");
+                             : mdnsRejection_;
             }
         }
 
@@ -962,6 +1033,8 @@ void BuiltinNode::registrationLoop() {
                 if (cfg_.registryHost.empty()) {
                     registryHost_.clear();
                     registryPort_ = 0;
+                    registryDiscovery_.clear();
+                    registryServiceType_.clear();
                 }
                 continue;
             }
@@ -997,7 +1070,12 @@ bool BuiltinNode::start(const NmosConfig& cfg) {
         registered_ = false;
         registryHost_.clear();
         registryPort_ = 0;
+        registryDiscovery_.clear();
+        registryServiceType_.clear();
+        mdnsRejection_.clear();
+        lastActivation_.clear();
         heartbeats_ = heartbeatFailures_ = 0;
+        everHeartbeat_ = false;
         state_ = "starting";
     }
     mintIds();
@@ -1021,7 +1099,9 @@ bool BuiltinNode::start(const NmosConfig& cfg) {
     }
 
     if (cfg_.useMdns && cfg_.registryHost.empty()) {
-        if (!browser_.start("_nmos-register._tcp")) {
+        // Both registration types, because which one a registry advertises
+        // depends on the IS-04 versions it serves. See registryServiceTypes().
+        if (!browser_.start(registryServiceTypes())) {
             std::lock_guard<std::mutex> lk(mutex_);
             warning_ = "mDNS browse unavailable: " + browser_.error() +
                        " -- set a registry host and port instead";
@@ -1078,15 +1158,27 @@ NmosStatus BuiltinNode::status() const {
         s.sourceId = sourceId_;
         s.flowId   = flowId_;
         s.senderId = senderId_;
+        s.registryHost      = registryHost_;
+        s.registryPort      = registryPort_;
+        s.registryDiscovery = registryDiscovery_;
+        s.registryServiceType = registryServiceType_;
+        s.lastActivation    = lastActivation_;
+        s.mdnsRejection     = mdnsRejection_;
         if (!registryHost_.empty())
             s.registryUrl = "http://" + registryHost_ + ":" +
                             std::to_string(registryPort_) + "/x-nmos/registration/" +
                             cfg_.registrationVersion + "/";
+        if (everHeartbeat_)
+            s.lastHeartbeatAgo =
+                std::chrono::duration<double>(Clock::now() - lastHeartbeatOk_).count();
         const std::string host = cfg_.nodeIp.empty() ? hostLabel_ : cfg_.nodeIp;
         s.nodeApiUrl = joinUrl(host, server_.port(),
                                "/x-nmos/node/" + cfg_.registrationVersion + "/");
     }
     s.advertising    = advertiser_.running();
+    s.browsing       = browser_.running();
+    s.browsedServiceTypes = browser_.serviceTypes();
+    s.mdnsError      = browser_.error();
     s.requestsServed = server_.requestsServed();
     s.lastRequest    = server_.lastRequestLine();
     s.masterEnable = transport().active;      // live, not last-commanded
@@ -1095,10 +1187,18 @@ NmosStatus BuiltinNode::status() const {
         s.connectedReceiverId = activeReceiverId_;
     }
     for (const auto& m : browser_.found()) {
-        s.discoveredRegistries.push_back(
-            m.displayName + "  " +
-            (m.address.empty() ? m.hostName : m.address) + ":" +
-            std::to_string(m.port) + "  pri=" + std::to_string(m.priority));
+        std::string line = m.displayName + "  " +
+                           (m.address.empty() ? m.hostName : m.address) + ":" +
+                           std::to_string(m.port) +
+                           "  pri=" + std::to_string(m.priority);
+        if (!m.serviceType.empty()) line += "  " + m.serviceType;
+        if (!m.apiVersions.empty()) {
+            line += "  api_ver=";
+            for (std::size_t i = 0; i < m.apiVersions.size(); ++i)
+                line += (i ? "," : "") + m.apiVersions[i];
+        }
+        if (m.port == 0) line += "  (resolving)";
+        s.discoveredRegistries.push_back(line);
     }
     return s;
 }

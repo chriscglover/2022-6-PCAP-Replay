@@ -7,9 +7,18 @@
 //
 // Two directions, both of which NMOS needs:
 //
-//   browse    _nmos-register._tcp  -- find the registry to register with. This
-//             is the normal path, and the reason the host/port override exists
-//             is that plenty of real networks block mDNS across subnets.
+//   browse    _nmos-register._tcp and _nmos-registration._tcp -- find the
+//             registry to register with. This is the normal path, and the reason
+//             the host/port override exists is that plenty of real networks
+//             block mDNS across subnets.
+//
+//             Both types have to be browsed. IS-04 used _nmos-registration._tcp
+//             up to v1.2 and added the shorter _nmos-register._tcp at v1.3,
+//             because the longer name breaks the 16-character service name limit
+//             in RFC 6763 section 7.2. sony/nmos-cpp advertises whichever
+//             matches the API versions the registry is configured for, so a
+//             registry serving v1.2 and below advertises only the long name and
+//             browsing for the short one alone finds nothing at all.
 //
 //   advertise _nmos-node._tcp      -- peer-to-peer operation. With no registry
 //             on the network at all, a controller that browses for nodes
@@ -31,6 +40,7 @@ namespace pcapreplay::nmos {
 struct MdnsService {
     std::string instance;        // "registry._nmos-register._tcp.local"
     std::string displayName;     // the instance label alone
+    std::string serviceType;     // "_nmos-register._tcp", parsed from `instance`
     std::string hostName;        // "server.local"
     std::string address;         // resolved IPv4, dotted quad
     std::uint16_t port = 0;
@@ -57,6 +67,9 @@ public:
 
     // serviceType is the bare DNS-SD type, e.g. "_nmos-register._tcp".
     bool start(const std::string& serviceType);
+    // Browse several types at once and pool the results. Succeeds if any one
+    // browse started; `error()` then describes the ones that did not.
+    bool start(const std::vector<std::string>& serviceTypes);
     void stop();
     bool running() const { return running_; }
 
@@ -64,6 +77,14 @@ public:
 
     // Highest-priority resolved service supporting `apiVersion`, if any.
     bool best(const std::string& apiVersion, MdnsService& out) const;
+
+    // Why best() found nothing, when something was nonetheless discovered --
+    // typically a registry whose api_ver does not list the version we ask for.
+    // Empty when best() succeeded or when nothing was discovered at all.
+    std::string rejection(const std::string& apiVersion) const;
+
+    // The types passed to start(), for reporting what was actually browsed.
+    std::vector<std::string> serviceTypes() const;
 
     std::string error() const;
 
@@ -74,10 +95,15 @@ private:
 
     mutable std::mutex       mutex_;
     std::vector<MdnsService> found_;
+    std::vector<std::string> serviceTypes_;
     std::string              error_;
     bool                     running_ = false;
     Impl*                    impl_ = nullptr;
 };
+
+// The two DNS-SD types an IS-04 registry may advertise its Registration API as.
+// Browse both: which one a registry uses depends on the API versions it serves.
+std::vector<std::string> registryServiceTypes();
 
 // Advertises one service instance for as long as it is alive.
 class MdnsAdvertiser {

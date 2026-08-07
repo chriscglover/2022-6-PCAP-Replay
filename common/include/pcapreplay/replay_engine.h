@@ -81,6 +81,12 @@ struct ReplayStatus {
     std::string   warning;
     std::string   formatText;
 
+    // Where the datagrams are actually going, read back from the open sockets
+    // rather than from the requested configuration. IS-05 can move the sender
+    // while it runs, so "what did you ask for" and "what is on the wire" are
+    // different questions and the status panel has to answer the second one.
+    std::string   destinationA, destinationB;
+
     std::uint64_t frameIndex = 0;        // monotonic since Start
     double        elapsedSeconds = 0.0;
 

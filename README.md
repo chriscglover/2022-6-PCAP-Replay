@@ -68,7 +68,7 @@ routed by a controller to a hardware ST 2022-6 receiver, and decoded.
 | IS-04 registration, heartbeat, Node API | ✅ Proven against a live registry |
 | IS-05 connection API, activation, destination change | ✅ Proven — routed by a controller |
 | SDP manifest, incl. `a=group:DUP` for the -7 pair | ✅ Proven — accepted by a hardware receiver |
-| mDNS registry discovery / peer-to-peer advertisement | ⚠️ Written; registry override path is the one exercised |
+| mDNS registry discovery / peer-to-peer advertisement | ⚠️ Browses both registration service types; use `replay_cli --discover` to check your own segment |
 | Scheduled IS-05 activation | ❌ Returns 501; only `activate_immediate` |
 | Long-run registry garbage-collection recovery | ⚠️ 404-triggered re-registration written, not yet exercised over hours |
 
@@ -139,7 +139,7 @@ Five times real time with both legs, so there is ample headroom. Use
 |------|---------------------|
 | IS-04 v1.3 | Registration and heartbeat; Node API serving self, device, source, flow, sender |
 | IS-05 v1.1 | `constraints`, `staged`, `active`, `transportfile`, `transporttype`, and `bulk/senders` |
-| Discovery | mDNS browse for `_nmos-register._tcp`, with a manual host/port override |
+| Discovery | mDNS browse for **both** `_nmos-register._tcp` and `_nmos-registration._tcp`, with a manual host/port override |
 | Peer-to-peer | Advertises `_nmos-node._tcp`, so a controller can find the node with no registry present |
 
 ST 2022-6 carries a whole SDI signal, so it is modelled as a **mux**: the source
@@ -151,6 +151,52 @@ third-party broadcast ST 2022-6 sender.
 Resource UUIDs are **deterministic** (UUID v5 over the machine name and the
 resource role), so they survive a restart and a controller's existing route
 still points at something that exists.
+
+### Finding the registry
+
+Both DNS-SD service types are browsed, because which one a registry advertises
+depends on the API versions it serves: IS-04 named the Registration API
+`_nmos-registration._tcp` up to v1.2, and added the shorter `_nmos-register._tcp`
+at v1.3 because the first is 18 characters against the 16 RFC 6763 §7.2 allows.
+Browsing only the v1.3 name means a registry that is plainly on the network is
+never seen.
+
+To check a segment before blaming anything else:
+
+```powershell
+.\build\bin\replay_cli.exe --discover 10
+```
+
+That browses both types, prints every registry with its address, priority and
+advertised `api_ver`, and says which one the node would register with — or why
+none of them will do. It needs no capture file.
+
+The status panel then shows whether registration actually happened and against
+which registry, so "listed in the controller" and "registered" cannot be confused
+for each other.
+
+### Changing the destination from a controller
+
+The transmit sockets are bound to their group when they are opened, so moving the
+sender means restarting the engine. Three things follow from that, and all three
+are enforced:
+
+- The restart is **confirmed, not assumed**. If the engine does not come back up
+  on the new group, IS-05 answers `500` with the reason rather than `200`. A
+  controller treats `200` as "the sender has moved".
+- What is reported is **what is on the wire**, read back from the running engine
+  rather than from what the GUI last asked for. The Node API, the IS-05 `active`
+  endpoint and the SDP therefore cannot advertise a group nothing is being sent
+  to.
+- The GUI fields follow an IS-05 change. They are what every start path builds
+  its configuration from, so leaving them stale meant the next fault checkbox or
+  Start press silently reinstated the old group and undid the routing.
+
+`master_enable` is kept in step with the engine for the same reason. IS-05 makes
+a PATCH a partial update of `staged`, so anything the body omits keeps its staged
+value — which is correct, and only works if `staged` tracks reality. Here reality
+can move without IS-05 touching it, because the GUI can start and stop the replay
+itself.
 
 ### The SDP
 
@@ -209,6 +255,9 @@ sender:
 measurement.
 
 ```powershell
+# is an NMOS registry discoverable from this machine? (needs no capture)
+.\build\bin\replay_cli.exe --discover 10
+
 # what is in these captures?
 .\build\bin\replay_cli.exe red.pcap blue.pcap --probe
 
@@ -278,6 +327,35 @@ dependencies have both been **removed from vcpkg**, and its supported build path
 is now Conan. `NmosBackend` in `nmos/include/pcapreplay/nmos/nmos_node.h` is the
 seam — adding an nmos-cpp backend means another implementation of that
 interface, not a rewrite of the app.
+
+**No nmos-cpp code is used here.** Not a file, not a function, not a line. The
+IS-04 and IS-05 implementations in `nmos/` were written from the AMWA
+specifications, and nmos-cpp was consulted only as a reference for how those
+specifications are read in practice — see the acknowledgement below.
+
+## Acknowledgements
+
+Thank you to the authors and maintainers of **[sony/nmos-cpp][nmos-cpp]**, the
+reference open-source implementation of the AMWA NMOS specifications, released
+under the **Apache License 2.0**.
+
+nmos-cpp was used here as a *reference*, in the ordinary sense of reading a
+well-regarded implementation to check an understanding of the specifications
+against one that is known to interoperate. Two points in this codebase are the
+better for it:
+
+- that the Registration API is advertised as `_nmos-registration._tcp` for IS-04
+  v1.0–v1.2 and `_nmos-register._tcp` for v1.3 and later, so both have to be
+  browsed;
+- that an IS-05 PATCH is a merge over `staged`, so a field the request omits
+  keeps its staged value rather than being re-read from `active`.
+
+Both are facts about IS-04 and IS-05 rather than about nmos-cpp's expression of
+them. **No nmos-cpp source code has been copied, adapted or linked**, in whole or
+in part, so no Apache 2.0 obligation attaches to this project — the thanks are
+owed regardless.
+
+[nmos-cpp]: https://github.com/sony/nmos-cpp
 
 ## Licence
 

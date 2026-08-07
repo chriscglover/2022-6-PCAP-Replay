@@ -22,10 +22,13 @@
 #include <commctrl.h>
 #include <commdlg.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "pcapreplay/net_interfaces.h"
@@ -55,7 +58,16 @@ struct App {
     std::mutex    controlMutex;
     ReplayConfig  cfg;
     int           frameRateNum = 25, frameRateDen = 1;
+    // Read by the stats server thread, which must not reach into the dialog for
+    // it -- a cross-thread SendMessage to a UI thread busy inside an IS-05
+    // activation would deadlock the pair.
+    std::atomic<bool> nmosEnabled{false};
     bool          uiDirty = false;
+    // Set when IS-05 changed the transport behind the GUI's back, so the dialog
+    // fields can be brought back into line with it. Without this the next thing
+    // that reads the fields -- a fault checkbox, or the Start button -- would
+    // quietly put the old multicast group back.
+    bool          fieldsDirty = false;
 };
 
 // ---- small helpers ---------------------------------------------------------
@@ -156,8 +168,18 @@ std::string ifaceMacFor(App& app, const std::string& ip) {
 nmos::SenderTransport queryTransport(App& app) {
     std::lock_guard<std::mutex> lk(app.controlMutex);
     nmos::SenderTransport t;
-    const ReplayConfig& c = app.cfg;
-    t.active      = app.engine.running();
+
+    // While the engine is running, report what it is actually transmitting, not
+    // what the GUI last asked for. The two are different objects and they do
+    // come apart -- an IS-05 activation that fails to restart the engine, or a
+    // GUI field edited but not applied, would otherwise have the Node API, the
+    // IS-05 active endpoint and the SDP all confidently advertising a multicast
+    // group nothing is being sent to. A controller believes the manifest, so a
+    // wrong one is worse than a stale one.
+    const bool live = app.engine.running();
+    const ReplayConfig liveCfg = app.engine.activeConfig();
+    const ReplayConfig& c = live ? liveCfg : app.cfg;
+    t.active      = live;
     t.redundant   = c.enablePathB;
     t.sourceIpA   = c.pathA.interfaceIp;
     t.sourceIpB   = c.pathB.interfaceIp;
@@ -179,9 +201,20 @@ nmos::SenderTransport queryTransport(App& app) {
 }
 
 // Called from an IS-05 activation, on an HTTP worker thread.
+//
+// Changing the destination means restarting the engine: the transmit sockets are
+// bound to their group at open, so there is nothing to retune in place. That
+// restart has to be confirmed rather than assumed. A controller takes a 200 here
+// as "the sender has moved", and if the engine failed to come back up on the new
+// group -- a NIC that has gone away, a group the stack will not take -- then
+// answering 200 tells the controller a lie it will not find out about.
 bool applyTransport(App& app, const nmos::SenderTransport& want, std::string& err) {
+    ReplayConfig previous;
+    bool started = false;
     {
         std::lock_guard<std::mutex> lk(app.controlMutex);
+        previous = app.cfg;
+
         ReplayConfig cfg = app.cfg;
         cfg.pathA.group = want.destIpA;
         cfg.pathA.port  = want.destPortA;
@@ -205,13 +238,49 @@ bool applyTransport(App& app, const nmos::SenderTransport& want, std::string& er
                       " is not a usable multicast group";
                 return false;
             }
+            if (cfg.enablePathB && cfg.pathA.group == cfg.pathB.group &&
+                cfg.pathA.port == cfg.pathB.port) {
+                err = "both ST 2022-7 legs would point at " + cfg.pathA.group +
+                      ":" + std::to_string(cfg.pathA.port) +
+                      ", which is not redundancy";
+                return false;
+            }
             app.cfg = cfg;
             app.engine.start(cfg);
+            started = true;
         } else {
             app.cfg = cfg;
             app.engine.stop();
         }
         app.uiDirty = true;
+        app.fieldsDirty = true;
+    }
+
+    if (!started) return true;
+
+    // Wait for the restart to settle, outside the lock so the GUI keeps
+    // repainting. status().running goes true only once both transmit sockets are
+    // open, and running() goes false if the engine gave up, so one of the two
+    // answers arrives -- typically within a frame or two, but opening the first
+    // frame out of a large capture can take longer.
+    using namespace std::chrono;
+    const auto deadline = steady_clock::now() + seconds(10);
+    for (;;) {
+        const ReplayStatus s = app.engine.status();
+        if (s.running) break;
+        if (!app.engine.running()) {
+            err = s.error.empty() ? "the replay engine did not start" : s.error;
+            std::lock_guard<std::mutex> lk(app.controlMutex);
+            app.cfg = previous;          // do not advertise a group we never used
+            app.uiDirty = true;
+            app.fieldsDirty = true;
+            return false;
+        }
+        if (steady_clock::now() >= deadline) {
+            err = "the replay engine did not come up within 10 s";
+            return false;
+        }
+        std::this_thread::sleep_for(milliseconds(20));
     }
     return true;
 }
@@ -292,6 +361,19 @@ void setRunningUi(HWND dlg, bool running) {
     else          updateModeUi(dlg, true);
     // Faults stay live while running -- flipping impairments mid-stream is the
     // whole point of having them on tick boxes.
+}
+
+// Put the transmit fields back in step with the configuration actually in force.
+//
+// IS-05 can move the sender without the GUI knowing, and every path that starts
+// the engine builds its config from these fields -- so leaving them stale means
+// the next fault checkbox or Start press silently reinstates the old multicast
+// group and undoes the controller's routing. Called on the GUI thread only.
+void setTransmitFields(HWND dlg, const ReplayConfig& cfg) {
+    setText(dlg, IDC_A_GROUP, cfg.pathA.group);
+    SetDlgItemInt(dlg, IDC_A_PORT, UINT(cfg.pathA.port), FALSE);
+    setText(dlg, IDC_B_GROUP, cfg.pathB.group);
+    SetDlgItemInt(dlg, IDC_B_PORT, UINT(cfg.pathB.port), FALSE);
 }
 
 void doBrowse(HWND dlg, App& app, int editId) {
@@ -397,6 +479,7 @@ void saveSettings(HWND dlg, App& app, const ReplayConfig& cfg) {
 
 void startNmos(HWND dlg, App& app) {
     const nmos::NmosConfig n = nmosConfigFrom(dlg, app);
+    app.nmosEnabled.store(n.enabled, std::memory_order_relaxed);
     if (!n.enabled) {
         app.nmos->stop();
         return;
@@ -475,6 +558,8 @@ std::string statusText(const ReplayStatus& s) {
     char buf[4096];
     std::snprintf(buf, sizeof buf,
         "Format                 : %s\r\n"
+        "Sending to  path A     : %s\r\n"
+        "            path B     : %s\r\n"
         "Elapsed                : %.1f s\r\n"
         "Frames sent            : %s\r\n"
         "\r\n"
@@ -506,6 +591,8 @@ std::string statusText(const ReplayStatus& s) {
         "Duplicated             : %s\r\n"
         "Sequence jumps         : %s\r\n",
         s.formatText.c_str(),
+        s.destinationA.c_str(),
+        s.destinationB.empty() ? "-  (single leg, ST 2022-6)" : s.destinationB.c_str(),
         s.elapsedSeconds,
         commas(s.frameIndex).c_str(),
 
@@ -543,29 +630,76 @@ std::string statusText(const ReplayStatus& s) {
     return out;
 }
 
+// Whether this node is registered, and with which registry, are the first two
+// questions anyone asks of a sender that a controller cannot see -- so they get
+// a line each and are stated outright, rather than being left to be inferred
+// from a state string.
 std::string nmosText(const nmos::NmosStatus& n, bool enabled) {
     if (!enabled) return "NMOS off. Tick the box and press Start.";
     if (!n.running) return n.error.empty() ? "NMOS stopped." : ("!! " + n.error);
 
     std::string s;
-    s += "Node API : " + n.nodeApiUrl + "\r\n";
-    s += "State    : " + n.registryState;
-    if (n.registered) s += "   heartbeats " + commas(n.heartbeats);
+
+    s += std::string("Registered : ") + (n.registered ? "YES" : "no");
+    if (n.registered) {
+        s += "   heartbeats " + commas(n.heartbeats);
+        if (n.lastHeartbeatAgo >= 0.0) {
+            char age[32];
+            std::snprintf(age, sizeof age, "%.0fs ago", n.lastHeartbeatAgo);
+            s += ", last " + std::string(age);
+        }
+    }
     if (n.heartbeatFailures) s += "   failures " + commas(n.heartbeatFailures);
     s += "\r\n";
-    s += std::string("Sender   : ") + (n.masterEnable ? "enabled" : "disabled");
+
+    // Where. Only meaningful once a registry has been settled on, so say so
+    // plainly when there is not one rather than printing an empty field.
+    s += "Registry   : ";
+    if (!n.registryUrl.empty()) {
+        s += n.registryUrl;
+        if (!n.registryDiscovery.empty()) {
+            s += "   (via " + n.registryDiscovery;
+            if (!n.registryServiceType.empty()) s += " " + n.registryServiceType;
+            s += ")";
+        }
+    } else {
+        s += "none yet   -- " + n.registryState;
+    }
+    s += "\r\n";
+    if (!n.registryUrl.empty()) s += "State      : " + n.registryState + "\r\n";
+
+    s += "Node API   : " + n.nodeApiUrl + "\r\n";
+    s += std::string("Sender     : ") + (n.masterEnable ? "enabled" : "disabled");
     if (!n.connectedReceiverId.empty()) s += "   routed to " + n.connectedReceiverId;
     s += n.advertising ? "   (advertising peer-to-peer)" : "";
     s += "\r\n";
-    s += "Sender id: " + n.senderId + "\r\n";
-    if (!n.discoveredRegistries.empty()) {
-        s += "Found    : ";
-        for (std::size_t i = 0; i < n.discoveredRegistries.size(); ++i)
-            s += (i ? "\r\n           " : "") + n.discoveredRegistries[i];
+    s += "Sender id  : " + n.senderId + "\r\n";
+
+    if (!n.lastActivation.empty()) s += "Last IS-05 : " + n.lastActivation + "\r\n";
+
+    // Discovery. Shown even when a registry has been found, because "browsing
+    // these types, found these" is what settles an argument about whether mDNS
+    // is working on the segment.
+    if (n.browsing || !n.browsedServiceTypes.empty()) {
+        s += "mDNS       : browsing ";
+        for (std::size_t i = 0; i < n.browsedServiceTypes.size(); ++i)
+            s += (i ? ", " : "") + n.browsedServiceTypes[i];
+        if (!n.browsing) s += "   (stopped)";
         s += "\r\n";
     }
-    if (!n.warning.empty()) s += "!! " + n.warning + "\r\n";
-    if (!n.error.empty())   s += "!! " + n.error + "\r\n";
+    if (!n.discoveredRegistries.empty()) {
+        s += "Found      : ";
+        for (std::size_t i = 0; i < n.discoveredRegistries.size(); ++i)
+            s += (i ? "\r\n             " : "") + n.discoveredRegistries[i];
+        s += "\r\n";
+    } else if (n.browsing) {
+        s += "Found      : no registry advertised on this segment yet\r\n";
+    }
+
+    if (!n.mdnsRejection.empty()) s += "!! " + n.mdnsRejection + "\r\n";
+    if (!n.mdnsError.empty())     s += "!! mDNS: " + n.mdnsError + "\r\n";
+    if (!n.warning.empty())       s += "!! " + n.warning + "\r\n";
+    if (!n.error.empty())         s += "!! " + n.error + "\r\n";
     return s;
 }
 
@@ -623,8 +757,14 @@ INT_PTR CALLBACK dlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         }
         startNmos(dlg, *app);
 
+        // The scraped page carries the NMOS block too, so a report gathered from
+        // a machine nobody is sitting at still says whether the node registered
+        // and with which registry.
         app->stats.start(kReplayStatsPort, [app] {
-            return statusText(app->engine.status());
+            return statusText(app->engine.status()) +
+                   "\r\n-- nmos --------------------------------------------\r\n" +
+                   nmosText(app->nmos->status(),
+                            app->nmosEnabled.load(std::memory_order_relaxed));
         });
         setText(dlg, IDC_STATSURL,
                 app->stats.running()
@@ -711,12 +851,17 @@ INT_PTR CALLBACK dlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
             // back, so the buttons follow the engine rather than the last click.
             const bool running = s.running;
             const bool shown = GetWindowTextLengthW(GetDlgItem(dlg, IDC_START)) == 4;
-            bool dirty = false;
+            bool dirty = false, fields = false;
+            ReplayConfig cur;
             {
                 std::lock_guard<std::mutex> lk(app->controlMutex);
                 dirty = app->uiDirty;
+                fields = app->fieldsDirty;
                 app->uiDirty = false;
+                app->fieldsDirty = false;
+                cur = app->cfg;
             }
+            if (fields) setTransmitFields(dlg, cur);
             if (shown != running || dirty) setRunningUi(dlg, running);
         }
         return TRUE;

@@ -47,6 +47,13 @@ std::vector<std::string> splitCsv(const std::string& s) {
     return out;
 }
 
+std::string join(const std::vector<std::string>& v, const char* sep) {
+    if (v.empty()) return "nothing";
+    std::string out;
+    for (std::size_t i = 0; i < v.size(); ++i) out += (i ? sep : "") + v[i];
+    return out;
+}
+
 std::string dnsErrorText(DWORD status) {
     switch (status) {
         case ERROR_SUCCESS:            return {};
@@ -92,9 +99,17 @@ std::string localHostLabel() {
 
 struct MdnsBrowser::Impl {
     MdnsBrowser*      owner = nullptr;
-    DNS_SERVICE_CANCEL browseCancel{};
-    bool               browsing = false;
-    std::wstring       queryName;
+
+    // One browse per service type. Each is separately cancellable and carries
+    // its own query name, which has to outlive the call because DnsServiceBrowse
+    // keeps the pointer.
+    struct BrowseCtx {
+        Impl*              impl = nullptr;
+        std::wstring       queryName;
+        DNS_SERVICE_CANCEL cancel{};
+        bool               browsing = false;
+    };
+    std::vector<BrowseCtx*> browses;
 
     // Resolves are individually cancellable and complete asynchronously, so
     // each carries its own context that outlives this call.
@@ -117,7 +132,8 @@ struct MdnsBrowser::Impl {
 
 void WINAPI MdnsBrowser::Impl::browseCallback(DWORD status, void* ctx,
                                               DNS_RECORD* records) {
-    auto* impl = static_cast<Impl*>(ctx);
+    auto* bc = static_cast<BrowseCtx*>(ctx);
+    Impl* impl = bc ? bc->impl : nullptr;
     if (!impl || impl->shuttingDown.load()) {
         if (records) DnsRecordListFree(records, DnsFreeRecordList);
         return;
@@ -151,9 +167,22 @@ void WINAPI MdnsBrowser::Impl::resolveCallback(DWORD status, void* ctx,
         s.hostName = narrow(instance->pszHostName);
         s.port     = instance->wPort;
 
-        // The label is everything before the service type.
+        // The label is everything before the service type, and the type is what
+        // is left once the trailing .local is taken off. Which of the two
+        // registration types a registry answered on is worth keeping: it is the
+        // quickest way to tell an old registry from a v1.3 one.
         const std::size_t dot = s.instance.find('.');
         s.displayName = dot == std::string::npos ? s.instance : s.instance.substr(0, dot);
+        if (dot != std::string::npos) {
+            s.serviceType = s.instance.substr(dot + 1);
+            while (!s.serviceType.empty() && s.serviceType.back() == '.')
+                s.serviceType.pop_back();
+            const std::string local = ".local";
+            if (s.serviceType.size() > local.size() &&
+                s.serviceType.compare(s.serviceType.size() - local.size(),
+                                      local.size(), local) == 0)
+                s.serviceType.erase(s.serviceType.size() - local.size());
+        }
 
         if (instance->ip4Address) {
             in_addr a{};
@@ -226,36 +255,64 @@ void MdnsBrowser::Impl::reapFinishedResolves() {
 MdnsBrowser::~MdnsBrowser() { stop(); }
 
 bool MdnsBrowser::start(const std::string& serviceType) {
+    return start(std::vector<std::string>{serviceType});
+}
+
+bool MdnsBrowser::start(const std::vector<std::string>& serviceTypes) {
     stop();
     {
         std::lock_guard<std::mutex> lk(mutex_);
         found_.clear();
         error_.clear();
+        serviceTypes_ = serviceTypes;
     }
 
     impl_ = new Impl();
     impl_->owner = this;
-    // DNS-SD browse names are fully qualified into the mDNS domain.
-    std::string q = serviceType;
-    if (q.size() < 6 || q.compare(q.size() - 6, 6, ".local") != 0) q += ".local";
-    impl_->queryName = widen(q);
 
-    DNS_SERVICE_BROWSE_REQUEST req{};
-    req.Version          = DNS_QUERY_REQUEST_VERSION1;
-    req.InterfaceIndex   = 0;
-    req.QueryName        = const_cast<PWSTR>(impl_->queryName.c_str());
-    req.pBrowseCallback  = &Impl::browseCallback;
-    req.pQueryContext    = impl_;
+    std::string failures;
+    for (const std::string& type : serviceTypes) {
+        if (type.empty()) continue;
+        auto* bc = new Impl::BrowseCtx();
+        bc->impl = impl_;
+        // DNS-SD browse names are fully qualified into the mDNS domain.
+        std::string q = type;
+        if (q.size() < 6 || q.compare(q.size() - 6, 6, ".local") != 0) q += ".local";
+        bc->queryName = widen(q);
 
-    const DWORD st = DnsServiceBrowse(&req, &impl_->browseCancel);
-    if (st != DNS_REQUEST_PENDING && st != ERROR_SUCCESS) {
+        DNS_SERVICE_BROWSE_REQUEST req{};
+        req.Version          = DNS_QUERY_REQUEST_VERSION1;
+        req.InterfaceIndex   = 0;
+        req.QueryName        = const_cast<PWSTR>(bc->queryName.c_str());
+        req.pBrowseCallback  = &Impl::browseCallback;
+        req.pQueryContext    = bc;
+
+        const DWORD st = DnsServiceBrowse(&req, &bc->cancel);
+        if (st != DNS_REQUEST_PENDING && st != ERROR_SUCCESS) {
+            if (!failures.empty()) failures += "; ";
+            failures += q + ": " + dnsErrorText(st);
+            delete bc;
+            continue;
+        }
+        bc->browsing = true;
+        impl_->browses.push_back(bc);
+    }
+
+    if (impl_->browses.empty()) {
         std::lock_guard<std::mutex> lk(mutex_);
-        error_ = "cannot browse " + q + ": " + dnsErrorText(st);
+        error_ = "cannot browse: " + (failures.empty() ? std::string("no service type given")
+                                                       : failures);
         delete impl_;
         impl_ = nullptr;
         return false;
     }
-    impl_->browsing = true;
+    // Some browses started, so discovery works; the rest are reported but do
+    // not sink it. Losing one of the two registration types still finds a
+    // registry advertising the other.
+    if (!failures.empty()) {
+        std::lock_guard<std::mutex> lk(mutex_);
+        error_ = "partial browse: " + failures;
+    }
     running_ = true;
     return true;
 }
@@ -264,9 +321,11 @@ void MdnsBrowser::stop() {
     if (!impl_) { running_ = false; return; }
     impl_->shuttingDown.store(true);
 
-    if (impl_->browsing) {
-        DnsServiceBrowseCancel(&impl_->browseCancel);
-        impl_->browsing = false;
+    for (auto* bc : impl_->browses) {
+        if (bc->browsing) {
+            DnsServiceBrowseCancel(&bc->cancel);
+            bc->browsing = false;
+        }
     }
     {
         std::lock_guard<std::mutex> lk(impl_->resolveMutex);
@@ -282,6 +341,8 @@ void MdnsBrowser::stop() {
         for (auto* r : impl_->resolves) delete r;
         impl_->resolves.clear();
     }
+    for (auto* bc : impl_->browses) delete bc;
+    impl_->browses.clear();
     delete impl_;
     impl_ = nullptr;
     running_ = false;
@@ -319,9 +380,47 @@ bool MdnsBrowser::best(const std::string& apiVersion, MdnsService& out) const {
     return true;
 }
 
+std::string MdnsBrowser::rejection(const std::string& apiVersion) const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    int unresolved = 0;
+    std::string wrongVersion;
+    for (const auto& s : found_) {
+        if (s.port == 0 || (s.address.empty() && s.hostName.empty())) {
+            ++unresolved;
+            continue;
+        }
+        if (s.supportsVersion(apiVersion)) return {};   // best() would take it
+        if (!wrongVersion.empty()) wrongVersion += ", ";
+        wrongVersion += s.displayName + " serves " + join(s.apiVersions, "/");
+    }
+    if (!wrongVersion.empty())
+        return "found a registry but it does not serve " + apiVersion + ": " +
+               wrongVersion;
+    if (unresolved)
+        return std::to_string(unresolved) +
+               " registry advertisement(s) seen but not yet resolved";
+    return {};
+}
+
+std::vector<std::string> MdnsBrowser::serviceTypes() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return serviceTypes_;
+}
+
 std::string MdnsBrowser::error() const {
     std::lock_guard<std::mutex> lk(mutex_);
     return error_;
+}
+
+// IS-04 named the Registration API's DNS-SD type _nmos-registration._tcp up to
+// v1.2, and added _nmos-register._tcp at v1.3 because the first is 18 characters
+// against the 16 RFC 6763 section 7.2 allows. A registry advertises whichever
+// suits the versions it serves -- sony/nmos-cpp advertises the long name for
+// v1.2 and below and the short one for v1.3 and above -- so both must be
+// browsed. Browsing only the v1.3 name is why a registry that is plainly present
+// on the network can go unseen.
+std::vector<std::string> registryServiceTypes() {
+    return {"_nmos-register._tcp", "_nmos-registration._tcp"};
 }
 
 // ---------------------------------------------------------------------------

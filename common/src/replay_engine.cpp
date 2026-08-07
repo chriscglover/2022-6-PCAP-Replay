@@ -382,6 +382,14 @@ void ReplayEngine::run(ReplayConfig cfg) {
     std::uint16_t seq = 0;
     bool completed = false;
 
+    // Recorded once the sockets are open, so this describes the groups actually
+    // bound rather than the ones that were asked for.
+    auto describePath = [](const ReplayPath& p) {
+        std::string s = p.group + ":" + std::to_string(p.port);
+        if (!p.interfaceIp.empty()) s += "  via " + p.interfaceIp;
+        return s;
+    };
+
     {
         std::lock_guard<std::mutex> lk(mutex_);
         status_.running   = true;
@@ -390,6 +398,8 @@ void ReplayEngine::run(ReplayConfig cfg) {
         status_.atcPackets = atc.siteCount();
         status_.crcModelOk = atc.crcOk();
         status_.rewritingTimecode = rewriteTc;
+        status_.destinationA = describePath(cfg.pathA);
+        status_.destinationB = haveB ? describePath(cfg.pathB) : std::string();
     }
 
     // Emit one burst down one path, applying that path's impairments. Runs of

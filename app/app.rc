@@ -81,7 +81,7 @@ BEGIN
     LTEXT           "", IDC_STATSURL, 7, 332, 296, 10
 
     // ---- NMOS ------------------------------------------------------------
-    GROUPBOX        "NMOS", -1, 310, 4, 303, 152
+    GROUPBOX        "NMOS", -1, 310, 4, 303, 190
 
     CONTROL         "Register this replay as an NMOS sender", IDC_NMOS_EN,
                     "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 317, 17, 160, 10
@@ -108,13 +108,15 @@ BEGIN
                     IDC_NMOS_P2P, "Button",
                     BS_AUTOCHECKBOX | WS_TABSTOP, 317, 100, 200, 10
 
-    EDITTEXT        IDC_NMOS_STATUS, 317, 114, 290, 38,
+    // Registration state, the registry it went to and what mDNS turned up all
+    // land here, so it needs the depth to show them without scrolling.
+    EDITTEXT        IDC_NMOS_STATUS, 317, 114, 290, 76,
                     ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL |
                     WS_VSCROLL | NOT WS_TABSTOP
 
     // ---- Status ----------------------------------------------------------
-    GROUPBOX        "Status", -1, 310, 160, 303, 262
-    EDITTEXT        IDC_STATUS, 317, 172, 290, 244,
+    GROUPBOX        "Status", -1, 310, 198, 303, 224
+    EDITTEXT        IDC_STATUS, 317, 210, 290, 206,
                     ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL |
                     WS_VSCROLL | NOT WS_TABSTOP
 END

@@ -27,7 +27,13 @@
 //     --nmos-port N      node API port             (default 3210)
 //     --registry H:P     registry override, skips mDNS discovery
 //     --sdp              print the SDP that NMOS would publish, and exit
+//     --discover [N]     browse for NMOS registries over mDNS for N seconds
+//                        (default 5) and print what is on the segment. Takes no
+//                        capture, so it settles "is the registry discoverable
+//                        from this machine" on its own, before anything else is
+//                        blamed for a node that will not register.
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -41,7 +47,11 @@
 #include "pcapreplay/pcap_source.h"
 #include "pcapreplay/replay_engine.h"
 #include "pcapreplay/nmos/http.h"
+#include "pcapreplay/nmos/mdns.h"
 #include "pcapreplay/nmos/nmos_node.h"
+// Version only. Shared with the GUI and VERSIONINFO so there is one constant to
+// bump, not three that can disagree about what build this is.
+#include "resource.h"
 
 using namespace pcapreplay;
 
@@ -68,17 +78,83 @@ void printProbe(const PcapProbe& p) {
     if (!p.warning.empty()) std::printf("warning       : %s\n", p.warning.c_str());
 }
 
+// Browse for registries and print what turns up. Answers the question on its own
+// terms: whether this machine, on this segment, can see an NMOS registry over
+// mDNS at all -- separately from whether the node then manages to register.
+int discover(double seconds, const std::string& apiVersion) {
+    nmos::MdnsBrowser browser;
+    const std::vector<std::string> types = nmos::registryServiceTypes();
+
+    std::printf("browsing for %.0f s:", seconds);
+    for (const auto& t : types) std::printf("  %s", t.c_str());
+    std::printf("\n");
+    // Both types matter. A registry serving IS-04 v1.2 and below advertises only
+    // _nmos-registration._tcp; the shorter _nmos-register._tcp arrived at v1.3.
+    if (!browser.start(types)) {
+        std::printf("\nbrowse failed: %s\n", browser.error().c_str());
+        std::printf("mDNS needs the Windows DNS Client service running, and the\n"
+                    "segment has to carry multicast DNS. Use --registry HOST:PORT\n"
+                    "if it does not.\n");
+        return 1;
+    }
+
+    const auto deadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(std::int64_t(seconds * 1000.0));
+    std::size_t reported = 0;
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        const auto found = browser.found();
+        for (std::size_t i = reported; i < found.size(); ++i) {
+            const nmos::MdnsService& m = found[i];
+            std::printf("\n  %s\n", m.displayName.c_str());
+            std::printf("    type      : %s\n", m.serviceType.c_str());
+            std::printf("    host      : %s\n", m.hostName.c_str());
+            std::printf("    address   : %s:%u\n",
+                        m.address.empty() ? "(unresolved)" : m.address.c_str(),
+                        unsigned(m.port));
+            std::printf("    priority  : %d\n", m.priority);
+            std::printf("    api_ver   : ");
+            if (m.apiVersions.empty()) std::printf("(not advertised)");
+            for (std::size_t k = 0; k < m.apiVersions.size(); ++k)
+                std::printf("%s%s", k ? "," : "", m.apiVersions[k].c_str());
+            std::printf("\n    api_proto : %s\n", m.apiProto.c_str());
+            if (m.port)
+                std::printf("    would use : %s\n", m.baseUrl(apiVersion).c_str());
+        }
+        reported = found.size();
+    }
+
+    std::printf("\n%zu registry advertisement(s) seen\n", reported);
+
+    nmos::MdnsService best;
+    if (browser.best(apiVersion, best)) {
+        std::printf("would register with: %s\n", best.baseUrl(apiVersion).c_str());
+        browser.stop();
+        return 0;
+    }
+
+    const std::string why = browser.rejection(apiVersion);
+    if (!why.empty()) std::printf("no usable registry: %s\n", why.c_str());
+    else std::printf("no registry found. Either none is advertising on this "
+                     "segment, or mDNS is not carried between subnets here --\n"
+                     "use --registry HOST:PORT in that case.\n");
+    browser.stop();
+    return 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::printf(
-            "PCAP Replay 1.0 - console driver\n\n"
+            APP_NAME " " APP_VERSION_STR " - console driver\n\n"
             "usage: replay_cli <red.pcap> [blue.pcap] [options]\n"
             "  --probe  --ingest N  --sdp\n"
             "  --group A  --group-b B  --port N  --iface IP  --seconds N\n"
             "  --ring N  --skip N  --no-timecode\n"
-            "  --nmos  --nmos-port N  --registry HOST:PORT\n");
+            "  --nmos  --nmos-port N  --registry HOST:PORT\n"
+            "  --discover [seconds]   (no capture needed)\n");
         return 2;
     }
 
@@ -87,13 +163,22 @@ int main(int argc, char** argv) {
     int  port = 40000, ring = 16, skip = 10, nmosPort = 3210;
     double seconds = 0.0, ingestSeconds = 0.0;
     bool probeOnly = false, timecode = true, wantNmos = false, wantSdp = false;
-    bool wantGaps = false;
+    bool wantGaps = false, wantDiscover = false;
+    double discoverSeconds = 5.0;
     std::string registry;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         auto val = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
         if      (a == "--probe")       probeOnly = true;
+        else if (a == "--discover") {
+            wantDiscover = true;
+            // The duration is optional, so only swallow the next argument when
+            // it is actually a number rather than the next flag or a filename.
+            if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9')
+                discoverSeconds = std::atof(argv[++i]);
+            if (discoverSeconds <= 0.0) discoverSeconds = 5.0;
+        }
         else if (a == "--gaps")        wantGaps = true;
         else if (a == "--ingest")      ingestSeconds = std::atof(val().c_str());
         else if (a == "--sdp")         wantSdp = true;
@@ -117,6 +202,10 @@ int main(int argc, char** argv) {
     }
 
     WinsockScope ws;
+
+    // Before the capture, because discovery has nothing to do with one and
+    // demanding a pcap to test the network would be daft.
+    if (wantDiscover) return discover(discoverSeconds, "v1.3");
 
     const PcapProbe p = PcapSource::probe(red, blue);
     printProbe(p);
@@ -367,6 +456,11 @@ int main(int argc, char** argv) {
                 cfg.enablePathB ? " and " : "",
                 cfg.enablePathB ? groupB.c_str() : "");
     engine.start(cfg);
+    // The node came up before the engine did, so its idea of master_enable was
+    // seeded from a sender that was not yet running. Tell it the engine is live,
+    // or an IS-05 PATCH that moves the destination without naming master_enable
+    // will activate that stale false and stop the sender instead of moving it.
+    if (wantNmos) node->notifyChanged();
 
     double lastReport = -1.0;
     for (;;) {

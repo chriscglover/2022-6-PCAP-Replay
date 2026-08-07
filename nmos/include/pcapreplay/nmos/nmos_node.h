@@ -102,10 +102,25 @@ struct NmosStatus {
     std::string warning;
 
     std::string nodeApiUrl;              // what a controller should browse to
-    std::string registryUrl;             // the registry in use, if any
-    std::string registryState;           // human-readable state line
-    bool        registered = false;
+
+    // Where this node is registered, and how that registry was found. These are
+    // the two questions asked of a node that is misbehaving, so they are
+    // reported plainly rather than left to be inferred from `registryState`.
+    bool          registered = false;    // the registry has accepted us
+    std::string   registryUrl;           // the Registration API base in use
+    std::string   registryHost;
+    std::uint16_t registryPort = 0;
+    std::string   registryDiscovery;     // "mDNS" | "manual override" | ""
+    std::string   registryServiceType;   // the DNS-SD type it answered on
+    std::string   registryState;         // human-readable state line
+    double        lastHeartbeatAgo = -1.0;   // seconds; negative = never
+
     bool        advertising = false;
+    bool        browsing = false;        // an mDNS browse is actually running
+    std::vector<std::string> browsedServiceTypes;
+    std::string mdnsError;               // why the browse is not working
+    std::string mdnsRejection;           // found something, but could not use it
+
     std::uint64_t heartbeats = 0;
     std::uint64_t heartbeatFailures = 0;
     std::uint64_t requestsServed = 0;
@@ -114,6 +129,10 @@ struct NmosStatus {
     std::string nodeId, deviceId, sourceId, flowId, senderId;
     bool        masterEnable = false;
     std::string connectedReceiverId;
+
+    // What IS-05 last asked for and what came of it, so an activation that a
+    // controller believes worked can be checked against what the node did.
+    std::string lastActivation;
 
     std::vector<std::string> discoveredRegistries;
 };
