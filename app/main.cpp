@@ -786,6 +786,7 @@ std::string nmosText(const nmos::NmosStatus& n, bool enabled) {
     s += n.advertising ? "   (advertising peer-to-peer)" : "";
     s += "\r\n";
     s += "Sender id  : " + n.senderId + "\r\n";
+    if (!n.groupHint.empty()) s += "Group hint : " + n.groupHint + "\r\n";
 
     if (!n.lastActivation.empty()) s += "Last IS-05 : " + n.lastActivation + "\r\n";
 

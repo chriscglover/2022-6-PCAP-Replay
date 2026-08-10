@@ -141,6 +141,31 @@ private:
         return f.empty() ? instanceLabel() : instanceLabel() + " - " + f;
     }
 
+    // The BCP-002-01 group hint: "<group name>:<role in group>". A controller
+    // uses it to gather everything belonging to one physical thing under one
+    // heading, so the group has to name the instance and nothing finer. The
+    // loaded format is deliberately left out even though the label carries it:
+    // opening a different capture would otherwise move the sender into a
+    // brand new group, which is exactly the churn grouping exists to avoid.
+    //
+    // Host and port both appear for the same reason they are in the label --
+    // the port separates two copies on one machine, the host separates copies
+    // on different machines, and every machine hands out 3210 first. Two hosts
+    // grouped as one "PCAP Replay-3210" would be a worse lie than no grouping.
+    //
+    // The colon is the delimiter, so it cannot appear inside either half:
+    // instanceLabel()'s host:port is written host-port here, and a colon typed
+    // into the Label box is folded the same way rather than being read as an
+    // early end to the group name.
+    std::string groupHint() const {
+        std::string group = cfg_.label + " " + hostLabel_ + "-" +
+                            std::to_string(nodePort_);
+        for (char& c : group) if (c == ':') c = '-';
+        // The role names the essence, not the leg count: an ST 2022-7 pair is
+        // one sender with a redundant path, so toggling -7 must not rename it.
+        return group + ":2022-6";
+    }
+
     // ---- resources --------------------------------------------------------
     Json nodeResource() const;
     Json deviceResource() const;
@@ -417,7 +442,14 @@ Json BuiltinNode::senderResource() const {
     // instance, and what it is playing.
     j["label"]         = Json(streamLabel(t));
     j["description"]   = Json(t.formatText.empty() ? cfg_.description : t.formatText);
-    j["tags"]          = Json::object();
+    // The group hint lives on the sender and nowhere else: BCP-002-01 tags
+    // senders and receivers, which are what a controller lays out side by side,
+    // not the source and flow behind them.
+    Json hint = Json::array();
+    hint.push(Json(groupHint()));
+    Json tags = Json::object();
+    tags["urn:x-nmos:tag:grouphint/v1.0"] = hint;
+    j["tags"]          = tags;
     j["flow_id"]       = Json(flowId_);
     j["transport"]     = Json("urn:x-nmos:transport:rtp.mcast");
     j["device_id"]     = Json(deviceId_);
@@ -1249,6 +1281,7 @@ NmosStatus BuiltinNode::status() const {
         s.sourceId = sourceId_;
         s.flowId   = flowId_;
         s.senderId = senderId_;
+        s.groupHint = groupHint();
         s.registryHost      = registryHost_;
         s.registryPort      = registryPort_;
         s.registryDiscovery = registryDiscovery_;

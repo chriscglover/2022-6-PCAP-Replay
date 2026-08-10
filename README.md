@@ -68,6 +68,7 @@ routed by a controller to a hardware ST 2022-6 receiver, and decoded.
 | IS-04 registration, heartbeat, Node API | ✅ Proven against a live registry |
 | IS-05 connection API, activation, destination change | ✅ Proven — routed by a controller, and a live destination change confirmed onto the wire |
 | SDP manifest, incl. `a=group:DUP` for the -7 pair | ✅ Proven — accepted by a hardware receiver |
+| BCP-002-01 group hint | ⚠️ Published and distinct per instance, read back from the Node API; not yet seen grouped by a controller |
 | mDNS registry discovery | ✅ Proven — found and registered with a live registry over mDNS. `replay_cli --discover` checks your own segment |
 | Peer-to-peer advertisement | ⚠️ Advertised and unique per instance; not exercised with a controller and no registry present |
 | Two or more instances on one machine | ✅ Proven — distinct ports, UUIDs, labels and settings files, both registered at once |
@@ -143,6 +144,7 @@ Five times real time with both legs, so there is ample headroom. Use
 | IS-05 v1.1 | `constraints`, `staged`, `active`, `transportfile`, `transporttype`, and `bulk/senders` |
 | Discovery | mDNS browse for **both** `_nmos-register._tcp` and `_nmos-registration._tcp`, with a manual host/port override |
 | Peer-to-peer | Advertises `_nmos-node._tcp`, so a controller can find the node with no registry present |
+| BCP-002-01 | `urn:x-nmos:tag:grouphint/v1.0` on the sender, e.g. `PCAP Replay THEBEAST-3210:2022-6` |
 
 ST 2022-6 carries a whole SDI signal, so it is modelled as a **mux**: the source
 and flow are `urn:x-nmos:format:mux`, the flow's `media_type` is
@@ -174,6 +176,7 @@ exactly the IDs it had before and an existing route is not orphaned by upgrading
 | Settings | `replay.ini` | `replay-3211.ini` |
 | Sender UUID | unchanged from before | its own |
 | Label | `PCAP Replay EDIT-1:3210 - 1080i25` | `PCAP Replay EDIT-1:3211 - 625i25` |
+| Group hint | `PCAP Replay EDIT-1-3210:2022-6` | `PCAP Replay EDIT-1-3211:2022-6` |
 
 All three come from one slot number, so they cannot drift apart. A slot is claimed
 only when *both* its ports are free — keying on the node port alone would drop two
@@ -198,6 +201,38 @@ so folding the format in would mint a whole new node, device, source, flow and
 sender every time a different capture was loaded, and break every route a
 controller had made. Labels may change over a resource's life; identities may
 not.
+
+### The group hint
+
+The sender carries a BCP-002-01 group hint,
+`urn:x-nmos:tag:grouphint/v1.0`, in the form `{group name}:{role in group}`:
+
+```
+PCAP Replay THEBEAST-3210:2022-6
+```
+
+Controllers use it to gather everything belonging to one physical thing under
+one heading instead of listing loose senders in whatever order the registry
+returns them.
+
+The group names the *instance* — label, host and node port — and deliberately
+stops there. Host and port are in it for the same reason they are in the label:
+the port separates two copies on one machine, the host separates copies on
+different machines, and every machine hands out 3210 first, so a bare
+`PCAP Replay-3210` would fold two hosts into one group and claim a relationship
+that does not exist. The colon is the field delimiter, so the label's `host:port`
+is written `host-port` here, and a colon typed into the Label box is folded the
+same way rather than being read as an early end to the group name.
+
+What is *not* in it: the loaded format, which the label does carry. Opening a
+different capture would otherwise move the sender into a brand new group each
+time — precisely the churn grouping exists to prevent. Nor does the role follow
+`-6`/`-7`: an ST 2022-7 pair is one sender with a redundant path, not two
+senders, so the role stays `2022-6` and a controller's grouping survives the
+switch.
+
+The panel prints the hint next to the sender UUID, so it can be read off the
+screen rather than fetched out of the Node API.
 
 ### Finding the registry
 

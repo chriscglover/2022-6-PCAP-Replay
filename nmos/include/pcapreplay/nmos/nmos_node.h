@@ -127,6 +127,9 @@ struct NmosStatus {
     std::string lastRequest;
 
     std::string nodeId, deviceId, sourceId, flowId, senderId;
+    // The BCP-002-01 group hint published on the sender. Shown so it can be
+    // read off the panel rather than fetched out of the Node API.
+    std::string groupHint;
     bool        masterEnable = false;
     std::string connectedReceiverId;
 
