@@ -13,7 +13,6 @@ Built on the replay engine from the NDI2022-6 rig, with three changes:
    it as fits in RAM.
 2. **NMOS**: the app registers as an IS-04 sender, serves IS-05 so a controller
    can activate it and change its destination, and publishes an SDP manifest.
-3. **No NDI at all** — no SDK to build against and no runtime DLL to ship.
 
 Everything the original replay did still works: indefinite looping with fresh
 RTP and HBRMT headers so the loop join is invisible, live timecode rewriting,
