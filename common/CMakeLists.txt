@@ -1,9 +1,9 @@
 # pcapreplay_common -- SDI raster knowledge, the wire format, and the engines.
 #
-# Carried over from NDI2022-6's st2022_common with the NDI-facing half removed:
-# no ndi_support, no sender_engine, no receiver_engine, and therefore no NDI SDK
-# dependency at all. What is left is everything needed to read a capture and put
-# ST 2022-6 back on the wire.
+# Carried over from an earlier st2022_common with the live-video half removed:
+# no sender_engine, no receiver_engine, and therefore no external SDK dependency
+# at all. What is left is everything needed to read a capture and put ST 2022-6
+# back on the wire.
 
 # AVX2 paths live in a dedicated TU so the rest of the library stays baseline
 # x64 and the runtime probe in bitpack.cpp stays meaningful.

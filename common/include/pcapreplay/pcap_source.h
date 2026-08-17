@@ -1,6 +1,6 @@
 // Streaming SDI frame source backed by one or two pcap captures.
 //
-// This replaces the .sdi file that NDI2022-6's replay engine loaded whole into
+// This replaces the .sdi file that the earlier replay engine loaded whole into
 // RAM. Captures here are gigabytes, and the whole point is to replay all of one
 // rather than the first few seconds, so frames are produced on a background
 // thread straight off disk into a small ring buffer and consumed as they are

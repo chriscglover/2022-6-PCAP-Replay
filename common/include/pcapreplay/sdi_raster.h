@@ -1,9 +1,9 @@
 // Synthesis and recovery of a full SDI raster.
 //
-// This is the part with no library behind it. NDI gives us active picture only;
-// ST 2022-6 carries an entire SDI signal, so the sender has to *manufacture*
-// one -- timing references, line numbers, CRCs, blanking and all -- and the
-// receiver has to take it apart again.
+// This is the part with no library behind it. A frame source gives us active
+// picture only; ST 2022-6 carries an entire SDI signal, so the sender has to
+// *manufacture* one -- timing references, line numbers, CRCs, blanking and all
+// -- and the receiver has to take it apart again.
 //
 // Line layout, in multiplexed 10-bit words. HD (ST 292/424) carries two
 // interleaved streams (Cb Y Cr Y ...) so every timing word appears twice, once
@@ -51,9 +51,9 @@ public:
 
     const SdiFormatInfo& info() const { return fi_; }
 
-    // Copy one NDI frame's active picture into the raster. Stride is in bytes.
+    // Copy one source frame's active picture into the raster. Stride is in bytes.
     // Interlaced formats take a full progressive frame and split it into the two
-    // fields; this is what NDI hands us for an interleaved frame.
+    // fields; this is what a frame source hands us for an interleaved frame.
     void writeActiveUyvy8(const std::uint8_t* uyvy, int strideBytes);
     void writeActiveP216(const std::uint16_t* y, int yStrideBytes,
                          const std::uint16_t* cbcr, int cbcrStrideBytes);

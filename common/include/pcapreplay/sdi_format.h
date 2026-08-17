@@ -40,8 +40,8 @@ enum class SdiFormat : std::uint8_t {
 };
 
 // How the picture is scanned. PsF is carried on the wire exactly like
-// interlaced but is flagged differently in HBRMT FRAME and signalled to NDI as
-// progressive, which is the whole point of keeping it separate.
+// interlaced but is flagged differently in HBRMT FRAME and signalled downstream
+// as progressive, which is the whole point of keeping it separate.
 enum class ScanMode : std::uint8_t { Progressive, Interlaced, SegmentedFrame };
 
 struct SdiFormatInfo {
@@ -116,7 +116,7 @@ struct SdiFormatInfo {
 const std::vector<SdiFormatInfo>& allFormats();
 const SdiFormatInfo&              formatInfo(SdiFormat f);
 
-// Sender side: pick the SDI format that matches an incoming NDI frame exactly.
+// Sender side: pick the SDI format that matches an incoming video frame exactly.
 // Returns SdiFormat::Unknown if there is no exact match -- we never scale or
 // convert frame rate, so an unknown format is a hard error the GUI surfaces
 // rather than something to approximate.

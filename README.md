@@ -4,7 +4,7 @@ Turn a packet capture of an ST 2022-6 stream into a continuous, endlessly
 looping ST 2022-6/-7 source that an NMOS controller can route like any other
 piece of broadcast kit.
 
-Built on the replay engine from the NDI2022-6 rig, with three changes:
+Built on an earlier ST 2022-6 replay engine, with two changes:
 
 1. **The source is a pcap**, not an extracted `.sdi` raster. Give it both legs of
    an ST 2022-7 pair and they are merged, so a datagram lost on one leg is
@@ -30,7 +30,6 @@ install.
 | Visual C++ Redistributable | **Not needed.** Linked against the static CRT (`/MT`), so there is no `VCRUNTIME140.dll` or `MSVCP140.dll` to ship. |
 | .NET | **Not needed.** Native C++ throughout. |
 | Bonjour / mDNSResponder | **Not needed.** DNS-SD uses the Windows API in `dnsapi.dll`, not Apple's SDK or service. |
-| NDI runtime | **Not needed.** Unlike the NDI2022-6 rig this came from, nothing here touches the NDI SDK. |
 | OS | Windows 10 version 1703 or later, x64. The floor is `DnsServiceBrowse`/`DnsServiceRegister`, which arrived in 1703. |
 | CPU | Any x64. AVX2 is used for the 10-bit packing hot loops but is probed at runtime with a scalar fallback, so it is not required. |
 | Disk | Fast enough to stream the capture. 1080i25 needs ~190 MB/s per leg, so ~380 MB/s for a `-7` pair. Any NVMe is comfortable; measure yours with `replay_cli --ingest`. |
@@ -63,7 +62,7 @@ routed by a controller to a hardware ST 2022-6 receiver, and decoded.
 | pcap ingest, format detection, marker-bit frame cutting, raster validation | ✅ Proven on 1080i25 and 625i25 captures |
 | ST 2022-7 two-leg merge | ✅ Proven — recovers datagrams missing from one leg |
 | Streaming ring buffer at line rate | ✅ Proven — 129 fps merged against 25 fps needed |
-| Loop, fresh RTP/HBRMT, timecode rewrite, fault injection | ✅ Carried over from NDI2022-6, unchanged |
+| Loop, fresh RTP/HBRMT, timecode rewrite, fault injection | ✅ Carried over from the earlier replay engine, unchanged |
 | IS-04 registration, heartbeat, Node API | ✅ Proven against a live registry |
 | IS-05 connection API, activation, destination change | ✅ Proven — routed by a controller, and a live destination change confirmed onto the wire |
 | SDP manifest, incl. `a=group:DUP` for the -7 pair | ✅ Proven — accepted by a hardware receiver |
@@ -379,8 +378,8 @@ can show thousands of sequence holes and zero rejected frames at the same time.
 `http://127.0.0.1:49610/` returns the same panel as the GUI, in plain text, for
 scripting. Loopback only.
 
-Port 49610, not the 49603 the NDI2022-6 replay used: that rig is routinely
-running on the same machine and the two would otherwise fight over the port.
+Port 49610 is chosen because it is not normally in use, so the status endpoint
+is unlikely to collide with anything else on the machine.
 
 ## Supported formats
 
@@ -399,7 +398,7 @@ NULL/loopback link types are all handled.
 | `app/` | the Win32 dialog |
 | `tools/` | `replay_cli` |
 
-`common/` is NDI2022-6's `st2022_common` with the NDI-facing half removed and
+`common/` is the earlier `st2022_common` with the live-video half removed and
 the namespace renamed to `pcapreplay`.
 
 The NMOS layer is hand-rolled rather than sony/nmos-cpp, so the app stays a

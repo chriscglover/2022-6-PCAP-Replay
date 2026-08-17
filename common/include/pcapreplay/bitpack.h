@@ -1,5 +1,6 @@
 // Packing between 10-bit SDI words and the byte stream ST 2022-6 puts on the
-// wire, plus the pixel-format conversions to and from what NDI hands us.
+// wire, plus the pixel-format conversions to and from what a frame source
+// hands us.
 //
 // The wire packing is big-endian and continuous: four 10-bit words occupy
 // exactly five bytes, MSB first.
@@ -30,7 +31,7 @@ void unpack10(const std::uint8_t* src, std::size_t count, std::uint16_t* dst);
 
 inline std::size_t packedBytes(std::size_t words) { return words / 4 * 5; }
 
-// ---- NDI pixel formats -> 10-bit 4:2:2 mux --------------------------------
+// ---- Packed pixel formats -> 10-bit 4:2:2 mux -----------------------------
 //
 // SDI multiplexes as Cb Y0 Cr Y1, which is exactly UYVY's byte order, so these
 // are widenings rather than reorderings.
@@ -44,7 +45,7 @@ void uyvy8ToWords(const std::uint8_t* src, std::size_t pixels, std::uint16_t* ds
 void p216RowToWords(const std::uint16_t* y, const std::uint16_t* cbcr,
                     std::size_t pixels, std::uint16_t* dst);
 
-// ---- 10-bit mux -> NDI pixel formats --------------------------------------
+// ---- 10-bit mux -> packed pixel formats -----------------------------------
 
 void wordsToUyvy8(const std::uint16_t* src, std::size_t pixels, std::uint8_t* dst);
 void wordsToP216Row(const std::uint16_t* src, std::size_t pixels,

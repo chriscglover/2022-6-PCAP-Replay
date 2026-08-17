@@ -7,8 +7,8 @@
 //
 //   replay   http://127.0.0.1:49610/
 //
-// 49610, not the 49603 the NDI2022-6 replay used: that rig is routinely running
-// on the same machine as this one and the two would fight over the port.
+// 49610 is chosen because it is not normally in use, so the status endpoint is
+// unlikely to collide with anything else on the machine.
 //
 // Note this is NOT the NMOS HTTP server: that one has to be reachable from the
 // registry and from controllers, so it binds a real interface and lives in

@@ -1,6 +1,6 @@
 // PCAP Replay -- an ST 2022-6/-7 source that plays back packet captures.
 //
-// Built on the replay engine from the NDI2022-6 rig, with three changes:
+// Built on an earlier ST 2022-6 replay engine, with two changes:
 //
 //   1. The source is a pcap capture rather than an extracted .sdi raster, and
 //      two captures are merged as an ST 2022-7 pair, so a datagram lost on one
@@ -9,7 +9,6 @@
 //      first few seconds of it fitting in RAM.
 //   2. It is an NMOS sender: it registers with a registry over IS-04, serves
 //      IS-05 so a controller can route and activate it, and publishes an SDP.
-//   3. No NDI anywhere, so there is no SDK and no runtime DLL.
 //
 // Everything else is as it was: indefinite looping with fresh RTP and HBRMT
 // headers so the loop join is invisible, live timecode rewriting, and random

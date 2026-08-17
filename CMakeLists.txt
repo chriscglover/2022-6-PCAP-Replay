@@ -26,8 +26,8 @@ if(MSVC)
         _UNICODE
         # DnsServiceBrowse/Resolve/Register need Windows 10 1703 or later.
         _WIN32_WINNT=0x0A00)
-    # Static CRT: deployment is "copy the exe". Unlike the NDI2022-6 rig there
-    # is no runtime DLL to go with it -- nothing here links the NDI SDK.
+    # Static CRT: deployment is "copy the exe" -- no runtime DLL to go with it,
+    # and no external SDK is linked.
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 

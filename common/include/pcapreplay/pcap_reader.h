@@ -3,7 +3,7 @@
 // Streams the file, so capture size is not a constraint -- this app replays
 // multi-gigabyte captures straight off disk rather than loading them.
 //
-// Carried over from the NDI2022-6 offline tools, with two changes for GUI use:
+// Carried over from the earlier offline tools, with two changes for GUI use:
 // errors are returned as a string rather than printed to a console that does
 // not exist, and bytes read are counted so the GUI can show whether the disk is
 // actually keeping up with line rate.
