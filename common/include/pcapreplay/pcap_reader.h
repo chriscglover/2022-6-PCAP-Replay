@@ -15,6 +15,17 @@
 #include <string>
 #include <vector>
 
+// 64-bit file offsets, spelled differently by the two C libraries. Captures
+// here are routinely several gigabytes, so a 32-bit offset is not academic --
+// it is the difference between replaying all of a file and the first 2 GB.
+#ifdef _WIN32
+#define PCAPREPLAY_FSEEK  _fseeki64
+#define PCAPREPLAY_FTELL  _ftelli64
+#else
+#define PCAPREPLAY_FSEEK  fseeko
+#define PCAPREPLAY_FTELL  ftello
+#endif
+
 namespace pcapreplay {
 
 struct PcapReader {
@@ -30,16 +41,20 @@ struct PcapReader {
         close();
         error.clear();
         bytesRead = 0;
+#ifdef _WIN32
         fopen_s(&f, path.c_str(), "rb");
+#else
+        f = std::fopen(path.c_str(), "rb");
+#endif
         if (!f) { error = "cannot open " + path; return false; }
 
         // Big files are read strictly forwards; a large buffer keeps the read
         // syscall count down at the ~190 MB/s a 1080i25 leg demands.
         std::setvbuf(f, nullptr, _IOFBF, 1 << 20);
 
-        _fseeki64(f, 0, SEEK_END);
-        fileBytes = std::uint64_t(_ftelli64(f));
-        _fseeki64(f, 0, SEEK_SET);
+        PCAPREPLAY_FSEEK(f, 0, SEEK_END);
+        fileBytes = std::uint64_t(PCAPREPLAY_FTELL(f));
+        PCAPREPLAY_FSEEK(f, 0, SEEK_SET);
 
         std::uint8_t gh[24];
         if (std::fread(gh, 1, 24, f) != 24) {
@@ -66,7 +81,7 @@ struct PcapReader {
     }
 
     void rewindToFirstPacket() {
-        if (f) { _fseeki64(f, 24, SEEK_SET); bytesRead = 24; }
+        if (f) { PCAPREPLAY_FSEEK(f, 24, SEEK_SET); bytesRead = 24; }
     }
 
     std::uint32_t u32(const std::uint8_t* p) const {

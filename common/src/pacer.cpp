@@ -1,13 +1,23 @@
 #include "pcapreplay/pacer.h"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <mmsystem.h>
+#else
+#include <pthread.h>
+#include <sched.h>
+#include <time.h>
+#include <cerrno>
+#include <immintrin.h>
+#endif
 
 #include <algorithm>
 #include <cmath>
 
 namespace pcapreplay {
 namespace {
+
+#ifdef _WIN32
 
 inline std::int64_t qpc() {
     LARGE_INTEGER v;
@@ -24,6 +34,57 @@ inline double qpf() {
 // Below this, sleeping overshoots and we spin instead. 1.5 ms leaves room for
 // a 1 ms timer granularity plus scheduling slop.
 constexpr double kSpinThresholdSeconds = 0.0015;
+
+// Coarse wait. Windows cannot sleep for less than the current timer resolution,
+// so the caller only ever asks for the part of the wait that is well clear of it.
+inline void coarseWait(double seconds) {
+    const DWORD ms = DWORD(seconds * 1000.0);
+    Sleep(ms ? ms : 1);
+}
+
+inline void spinHint() { YieldProcessor(); }
+
+#else   // POSIX
+
+// CLOCK_MONOTONIC is the direct equivalent of QueryPerformanceCounter: it is
+// nanosecond-resolution, it does not step when the wall clock is adjusted, and
+// on any modern x86 kernel it is a vDSO read of the TSC with no syscall at all.
+// That last point matters here -- this is read tens of thousands of times a
+// second on the transmit thread's hot path.
+inline std::int64_t qpc() {
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return std::int64_t(ts.tv_sec) * 1000000000ll + ts.tv_nsec;
+}
+
+inline double qpf() { return 1e9; }
+
+// Linux sleeps far more accurately than Windows does: clock_nanosleep against
+// an absolute CLOCK_MONOTONIC deadline lands within tens of microseconds on an
+// ordinary kernel, against Windows' 1-15 ms. So the spin threshold can be an
+// order of magnitude tighter, which is most of what makes the spin loop cheap
+// here -- fewer packets are placed by burning CPU and more by sleeping to them.
+constexpr double kSpinThresholdSeconds = 0.00015;
+
+inline void coarseWait(double seconds) {
+    if (seconds <= 0.0) return;
+    // Absolute deadline rather than a relative sleep: a relative one restarts
+    // its interval if a signal interrupts it, which would quietly stretch every
+    // wait the process ever takes a signal during.
+    timespec now{};
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    const std::int64_t deadline =
+        std::int64_t(now.tv_sec) * 1000000000ll + now.tv_nsec +
+        std::int64_t(seconds * 1e9);
+    timespec until{};
+    until.tv_sec  = time_t(deadline / 1000000000ll);
+    until.tv_nsec = long(deadline % 1000000000ll);
+    while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &until, nullptr) == EINTR) {}
+}
+
+inline void spinHint() { _mm_pause(); }
+
+#endif
 
 // How much transmit debt the pacer will try to make up before re-anchoring.
 //
@@ -59,8 +120,15 @@ void SpinPacer::start(double packetsPerSecond) {
     pps_ = packetsPerSecond > 0.0 ? packetsPerSecond : 0.0;
     if (pps_ <= 0.0) return;
 
+#ifdef _WIN32
     // Tighten the OS timer so the coarse part of each wait is not 15 ms.
     timerRaised_ = timeBeginPeriod(1) == TIMERR_NOERROR;
+#else
+    // Nothing to raise: clock_nanosleep already resolves far finer than the
+    // spin threshold, and the process-wide timer slack a Linux thread inherits
+    // (50 us by default) is below it too.
+    timerRaised_ = false;
+#endif
 
     t0_ = qpc();
     issued_ = 0;
@@ -74,10 +142,12 @@ void SpinPacer::start(double packetsPerSecond) {
 }
 
 void SpinPacer::stop() {
+#ifdef _WIN32
     if (timerRaised_) {
         timeEndPeriod(1);
         timerRaised_ = false;
     }
+#endif
     running_ = false;
 }
 
@@ -137,19 +207,44 @@ int SpinPacer::acquire(int maxBurst) {
 
         if (waitS > kSpinThresholdSeconds) {
             sleeps_.fetch_add(1, std::memory_order_relaxed);
-            const DWORD ms = DWORD((waitS - kSpinThresholdSeconds) * 1000.0);
-            Sleep(ms ? ms : 1);
+            coarseWait(waitS - kSpinThresholdSeconds);
         } else {
             spins_.fetch_add(1, std::memory_order_relaxed);
             // Spin, but let a hyperthread sibling make progress.
-            YieldProcessor();
+            spinHint();
         }
     }
 }
 
 bool SpinPacer::elevateCurrentThread() {
+#ifdef _WIN32
     return SetThreadPriority(GetCurrentThread(),
                              THREAD_PRIORITY_TIME_CRITICAL) != 0;
+#else
+    // SCHED_FIFO is the equivalent of THREAD_PRIORITY_TIME_CRITICAL and it is
+    // what keeps a 7.4 us packet interval from being interrupted by an ordinary
+    // CFS timeslice. It needs CAP_SYS_NICE, which this tool deliberately does
+    // not demand: unprivileged replay works, it is simply less immune to what
+    // else the machine is doing.
+    //
+    // Grant it without running as root with either of:
+    //   sudo setcap cap_sys_nice=eip ./replay
+    //   sudo chrt -f 10 ./replay ...
+    //
+    // Failure is reported to the caller rather than swallowed, so the CLI can
+    // say the pacing is best-effort instead of leaving it to be discovered as
+    // jitter.
+    sched_param sp{};
+    sp.sched_priority = 10;     // low within SCHED_FIFO: real time, not greedy
+    if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) == 0) return true;
+
+    // Fall back to the best nice level the process is allowed. Worth having:
+    // most of the benefit is in not being preempted by background work, and
+    // this part needs no privilege at all.
+    sp.sched_priority = 0;
+    pthread_setschedparam(pthread_self(), SCHED_OTHER, &sp);
+    return false;
+#endif
 }
 
 PacerStats SpinPacer::stats() const {

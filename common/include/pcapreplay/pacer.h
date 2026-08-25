@@ -1,20 +1,24 @@
 // Packet pacing.
 //
 // This is the hard part of the sender. 1080i25 is 134,925 packets/sec -- one
-// every 7.41 us -- and 1080p50 is 269,850/sec, one every 3.71 us. Windows
-// cannot sleep for that long: Sleep(1) is 1-15 ms depending on the current
-// timer resolution, and a waitable timer bottoms out around 0.5 ms. At 1080i25
-// a 1 ms granularity is 135 packets of jitter.
+// every 7.41 us -- and 1080p50 is 269,850/sec, one every 3.71 us. No general
+// purpose OS will sleep for that long. Windows Sleep(1) is 1-15 ms depending on
+// the current timer resolution and a waitable timer bottoms out around 0.5 ms;
+// at 1080i25 a 1 ms granularity is 135 packets of jitter. Linux does far better
+// -- clock_nanosleep lands within tens of microseconds -- but tens of
+// microseconds is still several packets.
 //
 // A naive sender bursts a whole frame at line rate and then idles. That looks
 // perfect on a throughput graph and destroys any receiver with a realistically
 // sized buffer -- exactly the "fine on the bench, fails under load" result that
 // makes a reference rig worthless.
 //
-// So: absolute scheduling against QueryPerformanceCounter, never incremental,
-// so error cannot accumulate. Coarse waits sleep, the final few microseconds
-// spin. One pacer drives both ST 2022-7 paths, so the A and B copies leave in
-// the same slot.
+// So: absolute scheduling against a monotonic clock -- QueryPerformanceCounter
+// on Windows, CLOCK_MONOTONIC on Linux -- never incremental, so error cannot
+// accumulate. Coarse waits sleep, the final few microseconds spin. The
+// threshold between the two differs per platform because the sleep accuracy
+// does; the structure does not. One pacer drives both ST 2022-7 paths, so the A
+// and B copies leave in the same slot.
 //
 // See docs/04-pacing-and-network.md.
 #pragma once
@@ -71,7 +75,10 @@ public:
     PacerStats stats() const;
 
     // Pin the calling thread to time-critical priority. Call from the transmit
-    // thread. Returns false if the priority could not be raised.
+    // thread. Returns false if the priority could not be raised -- on Linux that
+    // is the ordinary unprivileged case, since SCHED_FIFO needs CAP_SYS_NICE.
+    // Replay still works; it is simply more exposed to what else the machine is
+    // doing, so the caller is expected to say so rather than ignore it.
     static bool elevateCurrentThread();
 
     // Nominal packets/sec for a format: bytes per frame / 1376, times rate.
@@ -80,7 +87,7 @@ public:
                                       std::size_t payloadBytes);
 
 private:
-    double        freq_        = 0.0;   // QPC ticks per second
+    double        freq_        = 0.0;   // monotonic clock ticks per second
     std::int64_t  t0_          = 0;
     double        pps_         = 0.0;
     std::int64_t  issued_      = 0;

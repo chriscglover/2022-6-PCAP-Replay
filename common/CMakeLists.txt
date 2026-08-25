@@ -11,6 +11,8 @@ add_library(pcapreplay_avx2 STATIC src/bitpack_avx2.cpp)
 target_include_directories(pcapreplay_avx2 PUBLIC include)
 if(MSVC)
     target_compile_options(pcapreplay_avx2 PRIVATE /arch:AVX2)
+else()
+    target_compile_options(pcapreplay_avx2 PRIVATE -mavx2)
 endif()
 
 add_library(pcapreplay_common STATIC
@@ -26,9 +28,19 @@ add_library(pcapreplay_common STATIC
     src/replay_engine.cpp
     src/stats_server.cpp
     src/settings.cpp
+    src/platform.cpp
+    src/status_text.cpp
 )
 
 target_include_directories(pcapreplay_common PUBLIC include)
-target_link_libraries(pcapreplay_common
-    PUBLIC  pcapreplay_avx2
-    PRIVATE ws2_32 iphlpapi winmm)
+if(WIN32)
+    target_link_libraries(pcapreplay_common
+        PUBLIC  pcapreplay_avx2
+        PRIVATE ws2_32 iphlpapi winmm)
+else()
+    # Sockets and interface enumeration are in libc on Linux; the only real
+    # link is pthreads, which the pacer also needs for SCHED_FIFO.
+    target_link_libraries(pcapreplay_common
+        PUBLIC  pcapreplay_avx2
+        PRIVATE Threads::Threads)
+endif()

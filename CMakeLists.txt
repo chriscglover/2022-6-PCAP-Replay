@@ -29,11 +29,25 @@ if(MSVC)
     # Static CRT: deployment is "copy the exe" -- no runtime DLL to go with it,
     # and no external SDK is linked.
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+else()
+    add_compile_options(-Wall -Wextra)
+    add_compile_options($<$<CONFIG:Release>:-O2>)
+    if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+        set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+    endif()
+    # Threads, and nothing else. There is no libpcap, no Avahi and no HTTP
+    # library here -- see the README on why the NMOS and DNS-SD layers are
+    # hand-rolled, which is the same reason on both platforms.
+    find_package(Threads REQUIRED)
 endif()
 
 add_subdirectory(common)
 add_subdirectory(nmos)
-add_subdirectory(app)
+# The Win32 dialog. There is no Linux equivalent and there is not meant to be:
+# on Linux the deliverable is replay_cli, which drives the same engines.
+if(WIN32)
+    add_subdirectory(app)
+endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/CMakeLists.txt")
     add_subdirectory(tools)
 endif()

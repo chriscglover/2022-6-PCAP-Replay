@@ -1,6 +1,11 @@
 #include "pcapreplay/bitpack.h"
 
+#ifdef _MSC_VER
 #include <intrin.h>
+#else
+#include <cpuid.h>
+#include <immintrin.h>
+#endif
 
 namespace pcapreplay {
 
@@ -49,19 +54,53 @@ void wordsToUyvy8(const std::uint16_t* src, std::size_t pixels, std::uint8_t* ds
 
 // ---------------------------------------------------------------------------
 
+namespace {
+
+// CPUID and XGETBV, which MSVC and GCC spell differently. Wrapped rather than
+// #ifdef-ed at the call site so the probe below reads as the sequence of checks
+// it is.
+inline void cpuid(int leaf, int sub, unsigned out[4]) {
+#ifdef _MSC_VER
+    __cpuidex(reinterpret_cast<int*>(out), leaf, sub);
+#else
+    __cpuid_count(unsigned(leaf), unsigned(sub), out[0], out[1], out[2], out[3]);
+#endif
+}
+
+// Only reached once CPUID has said OSXSAVE is set, so the instruction is
+// guaranteed to be legal here. Issued directly on GCC because _xgetbv is only
+// declared when the compiler is itself targeting a machine with XSAVE, and this
+// translation unit is deliberately built for baseline x86-64.
+inline unsigned long long xcr0() {
+#ifdef _MSC_VER
+    return _xgetbv(0);
+#else
+    unsigned int lo = 0, hi = 0;
+    __asm__ __volatile__("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+    return (static_cast<unsigned long long>(hi) << 32) | lo;
+#endif
+}
+
+}  // namespace
+
 bool avx2Available() {
     static const bool has = [] {
-        int info[4]{};
-        __cpuid(info, 0);
+        unsigned info[4]{};
+        cpuid(0, 0, info);
         if (info[0] < 7) return false;
-        __cpuidex(info, 7, 0);
-        const bool avx2 = (info[1] & (1 << 5)) != 0;   // EBX bit 5
-        __cpuid(info, 1);
-        const bool osxsave = (info[2] & (1 << 27)) != 0;
-        const bool avx     = (info[2] & (1 << 28)) != 0;
+
+        cpuid(7, 0, info);
+        const bool avx2 = (info[1] & (1u << 5)) != 0;     // EBX bit 5
+
+        cpuid(1, 0, info);
+        const bool osxsave = (info[2] & (1u << 27)) != 0;
+        const bool avx     = (info[2] & (1u << 28)) != 0;
         if (!(avx2 && avx && osxsave)) return false;
-        // Confirm the OS actually saves YMM state.
-        return (_xgetbv(0) & 0x6) == 0x6;
+
+        // Confirm the OS actually saves YMM state. A CPU that has AVX2 under a
+        // kernel that does not preserve the upper halves would fault, or worse,
+        // silently corrupt them across a context switch.
+        return (xcr0() & 0x6) == 0x6;
     }();
     return has;
 }

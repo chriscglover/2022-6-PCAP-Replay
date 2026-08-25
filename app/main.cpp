@@ -34,6 +34,8 @@
 #include "pcapreplay/net_interfaces.h"
 #include "pcapreplay/replay_engine.h"
 #include "pcapreplay/settings.h"
+#include "pcapreplay/status_text.h"
+#include "pcapreplay/nmos/status_text.h"
 #include "pcapreplay/stats_server.h"
 #include "pcapreplay/nmos/http.h"
 #include "pcapreplay/nmos/nmos_node.h"
@@ -214,12 +216,6 @@ void check(HWND dlg, int id, bool on) {
     CheckDlgButton(dlg, id, on ? BST_CHECKED : BST_UNCHECKED);
 }
 void enable(HWND dlg, int id, bool on) { EnableWindow(GetDlgItem(dlg, id), on); }
-
-std::string commas(std::uint64_t v) {
-    std::string s = std::to_string(v);
-    for (int i = int(s.size()) - 3; i > 0; i -= 3) s.insert(std::size_t(i), ",");
-    return s;
-}
 
 std::string bytesText(std::uint64_t b) {
     char buf[48];
@@ -654,165 +650,25 @@ void doStop(HWND dlg, App& app) {
 }
 
 // ---- status text -----------------------------------------------------------
+//
+// The panel itself is rendered by pcapreplay::statusText and
+// pcapreplay::nmos::statusText, which the CLI and the stats endpoint also use --
+// a panel that says something different depending on where you read it is worse
+// than no panel. All that is left here is the banner, which carries APP_NAME and
+// the version out of resource.h and so cannot live in the libraries.
 
 // Prefixed to every status report, including the one served over HTTP, so a
 // scraped stats page identifies which build produced it.
 const std::string kBanner = APP_NAME " " APP_VERSION_STR "\r\n\r\n";
 
-std::string statusText(const ReplayStatus& s) {
-    if (!s.running) {
-        if (s.completed) return kBanner + "Finished: reached the configured duration.";
-        return kBanner + (s.error.empty() ? std::string("Idle")
-                                          : ("Stopped: " + s.error));
-    }
-    const PcapSourceStatus& src = s.source;
-    char buf[4096];
-    std::snprintf(buf, sizeof buf,
-        "Format                 : %s\r\n"
-        "Sending to  path A     : %s\r\n"
-        "            path B     : %s\r\n"
-        "Elapsed                : %.1f s\r\n"
-        "Frames sent            : %s\r\n"
-        "\r\n"
-        "-- source ------------------------------------------\r\n"
-        "Merge                  : %s\r\n"
-        "Frames produced        : %s\r\n"
-        "Capture loops          : %s   (early %s)\r\n"
-        "Position in capture    : %.1f%%\r\n"
-        "Disk read rate         : %.0f Mb/s\r\n"
-        "Ring buffer            : %d / %d frames\r\n"
-        "Frames repeated        : %s   (ring ran dry %s times)\r\n"
-        "Rejected  raster / short / hole : %s / %s / %s\r\n"
-        "Sequence holes         : %s\r\n"
-        "Filled from blue leg   : %s\r\n"
-        "\r\n"
-        "-- transmit ----------------------------------------\r\n"
-        "Packet rate  target    : %.0f /s\r\n"
-        "             achieved  : %.0f /s   (%.1f%%)\r\n"
-        "Wire rate per path     : %.0f Mb/s\r\n"
-        "Datagrams built        : %s\r\n"
-        "\r\n"
-        "Timecode  time of day  : %s\r\n"
-        "          to midnight  : %s\r\n"
-        "ATC packets rewritten  : %d   line CRC: %s\r\n"
-        "\r\n"
-        "-- faults ------------------------------------------\r\n"
-        "Dropped A / B          : %s / %s\r\n"
-        "Reordered              : %s\r\n"
-        "Duplicated             : %s\r\n"
-        "Sequence jumps         : %s\r\n",
-        s.formatText.c_str(),
-        s.destinationA.c_str(),
-        s.destinationB.empty() ? "-  (single leg, ST 2022-6)" : s.destinationB.c_str(),
-        s.elapsedSeconds,
-        commas(s.frameIndex).c_str(),
-
-        src.merging ? "ST 2022-7, both legs" : "single leg",
-        commas(src.framesProduced).c_str(),
-        commas(src.loops).c_str(), commas(src.earlyLoops).c_str(),
-        src.progress * 100.0,
-        src.readMbps,
-        src.ringFill, src.ringDepth,
-        commas(s.repeatedFrames).c_str(), commas(src.starves).c_str(),
-        commas(src.framesRejectedRaster).c_str(),
-        commas(src.framesRejectedShort).c_str(),
-        commas(src.framesRejectedHole).c_str(),
-        commas(src.sequenceHoles).c_str(),
-        commas(src.filledFromBlue).c_str(),
-
-        s.targetPps, s.achievedPps,
-        s.targetPps > 0 ? 100.0 * s.achievedPps / s.targetPps : 0.0,
-        s.wireMbps,
-        commas(s.datagrams).c_str(),
-
-        s.rewritingTimecode ? s.tod.c_str() : "(not rewritten)",
-        s.rewritingTimecode ? s.countdown.c_str() : "-",
-        s.atcPackets,
-        s.rewritingTimecode ? (s.crcModelOk ? "rewritten" : "left alone (model mismatch)")
-                            : "untouched",
-
-        commas(s.droppedA).c_str(), commas(s.droppedB).c_str(),
-        commas(s.reordered).c_str(),
-        commas(s.duplicated).c_str(),
-        commas(s.seqJumps).c_str());
-
-    std::string out = kBanner + buf;
-    if (!s.warning.empty()) out += "\r\n!! " + s.warning + "\r\n";
-    return out;
+std::string statusPanel(const ReplayStatus& s) {
+    return kBanner + statusText(s);
 }
 
-// Whether this node is registered, and with which registry, are the first two
-// questions anyone asks of a sender that a controller cannot see -- so they get
-// a line each and are stated outright, rather than being left to be inferred
-// from a state string.
-std::string nmosText(const nmos::NmosStatus& n, bool enabled) {
+std::string nmosPanel(const nmos::NmosStatus& n, bool enabled) {
+    // The dialog says how to turn it on; the CLI and the stats page cannot.
     if (!enabled) return "NMOS off. Tick the box and press Start.";
-    if (!n.running) return n.error.empty() ? "NMOS stopped." : ("!! " + n.error);
-
-    std::string s;
-
-    s += std::string("Registered : ") + (n.registered ? "YES" : "no");
-    if (n.registered) {
-        s += "   heartbeats " + commas(n.heartbeats);
-        if (n.lastHeartbeatAgo >= 0.0) {
-            char age[32];
-            std::snprintf(age, sizeof age, "%.0fs ago", n.lastHeartbeatAgo);
-            s += ", last " + std::string(age);
-        }
-    }
-    if (n.heartbeatFailures) s += "   failures " + commas(n.heartbeatFailures);
-    s += "\r\n";
-
-    // Where. Only meaningful once a registry has been settled on, so say so
-    // plainly when there is not one rather than printing an empty field.
-    s += "Registry   : ";
-    if (!n.registryUrl.empty()) {
-        s += n.registryUrl;
-        if (!n.registryDiscovery.empty()) {
-            s += "   (via " + n.registryDiscovery;
-            if (!n.registryServiceType.empty()) s += " " + n.registryServiceType;
-            s += ")";
-        }
-    } else {
-        s += "none yet   -- " + n.registryState;
-    }
-    s += "\r\n";
-    if (!n.registryUrl.empty()) s += "State      : " + n.registryState + "\r\n";
-
-    s += "Node API   : " + n.nodeApiUrl + "\r\n";
-    s += std::string("Sender     : ") + (n.masterEnable ? "enabled" : "disabled");
-    if (!n.connectedReceiverId.empty()) s += "   routed to " + n.connectedReceiverId;
-    s += n.advertising ? "   (advertising peer-to-peer)" : "";
-    s += "\r\n";
-    s += "Sender id  : " + n.senderId + "\r\n";
-    if (!n.groupHint.empty()) s += "Group hint : " + n.groupHint + "\r\n";
-
-    if (!n.lastActivation.empty()) s += "Last IS-05 : " + n.lastActivation + "\r\n";
-
-    // Discovery. Shown even when a registry has been found, because "browsing
-    // these types, found these" is what settles an argument about whether mDNS
-    // is working on the segment.
-    if (n.browsing || !n.browsedServiceTypes.empty()) {
-        s += "mDNS       : browsing ";
-        for (std::size_t i = 0; i < n.browsedServiceTypes.size(); ++i)
-            s += (i ? ", " : "") + n.browsedServiceTypes[i];
-        if (!n.browsing) s += "   (stopped)";
-        s += "\r\n";
-    }
-    if (!n.discoveredRegistries.empty()) {
-        s += "Found      : ";
-        for (std::size_t i = 0; i < n.discoveredRegistries.size(); ++i)
-            s += (i ? "\r\n             " : "") + n.discoveredRegistries[i];
-        s += "\r\n";
-    } else if (n.browsing) {
-        s += "Found      : no registry advertised on this segment yet\r\n";
-    }
-
-    if (!n.mdnsRejection.empty()) s += "!! " + n.mdnsRejection + "\r\n";
-    if (!n.mdnsError.empty())     s += "!! mDNS: " + n.mdnsError + "\r\n";
-    if (!n.warning.empty())       s += "!! " + n.warning + "\r\n";
-    if (!n.error.empty())         s += "!! " + n.error + "\r\n";
-    return s;
+    return nmos::statusText(n, enabled);
 }
 
 // ---- dialog ----------------------------------------------------------------
@@ -891,10 +747,10 @@ INT_PTR CALLBACK dlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         // second instance on this machine should still get a stats page rather
         // than losing its only scriptable surface to the first one.
         auto provider = [app] {
-            return statusText(app->engine.status()) +
+            return statusPanel(app->engine.status()) +
                    "\r\n-- nmos --------------------------------------------\r\n" +
-                   nmosText(app->nmos->status(),
-                            app->nmosEnabled.load(std::memory_order_relaxed));
+                   nmosPanel(app->nmos->status(),
+                             app->nmosEnabled.load(std::memory_order_relaxed));
         };
         std::uint16_t statsPort = app->slot.statsPort;
         for (int i = 0; i < 20; ++i) {
@@ -967,7 +823,7 @@ INT_PTR CALLBACK dlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_TIMER:
         if (wp == kTimerStatus && app) {
             const ReplayStatus s = app->engine.status();
-            setText(dlg, IDC_STATUS, statusText(s));
+            setText(dlg, IDC_STATUS, statusPanel(s));
 
             std::string summary;
             if (s.running)        summary = s.formatText + "   running";
@@ -979,7 +835,7 @@ INT_PTR CALLBACK dlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
             setText(dlg, IDC_SUMMARY, summary);
 
             setText(dlg, IDC_NMOS_STATUS,
-                    nmosText(app->nmos->status(), checked(dlg, IDC_NMOS_EN)));
+                    nmosPanel(app->nmos->status(), checked(dlg, IDC_NMOS_EN)));
 
             // The engine can stop on its own -- a duration cap, or a fatal
             // source error -- and IS-05 can start or stop it behind the GUI's

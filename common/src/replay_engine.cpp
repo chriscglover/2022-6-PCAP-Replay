@@ -77,7 +77,11 @@ std::int64_t readAtc(const std::uint16_t* udw, int fps) {
 std::string hmsf(std::int64_t frames, int fps) {
     int h, m, s, f;
     framesToFields(frames, fps, h, m, s, f);
-    char buf[16];
+    // 24 rather than 16 because the compiler cannot see that framesToFields
+    // bounds all four to two digits, and a truncation warning on a line that
+    // cannot truncate is worse than four spare bytes: it trains you to skim
+    // warnings.
+    char buf[24];
     std::snprintf(buf, sizeof buf, "%02d:%02d:%02d:%02d", h, m, s, f);
     return buf;
 }
@@ -357,7 +361,15 @@ void ReplayEngine::run(ReplayConfig cfg) {
     {
         const std::time_t now = std::time(nullptr);
         std::tm lt{};
+        // The reentrant form, spelled differently by the two C libraries. It
+        // matters that it is the reentrant one: this runs on the transmit
+        // thread while the GUI thread may be formatting a time of its own, and
+        // plain localtime() hands both of them the same static buffer.
+#ifdef _WIN32
         localtime_s(&lt, &now);
+#else
+        localtime_r(&now, &lt);
+#endif
         todBase = atcToFrames(lt.tm_hour, lt.tm_min, lt.tm_sec, 0, fps);
     }
     const std::int64_t framesPerDay = std::int64_t(86400) * fps;

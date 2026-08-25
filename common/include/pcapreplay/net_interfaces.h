@@ -1,10 +1,13 @@
-// Network interface enumeration for the GUI's per-path NIC selectors.
+// Network interface enumeration, for the GUI's per-path NIC selectors and the
+// CLI's --iface.
 //
-// Multicast on Windows selects its outgoing interface *by address*, and getting
-// that wrong on a multi-homed box is the classic silent failure: traffic leaves
-// via the default route and nothing appears on the link you were watching. This
-// machine has a 10G Mellanox and a Hyper-V vSwitch, so the selector is not
-// optional -- see docs/04-pacing-and-network.md.
+// Multicast selects its outgoing interface *by address* on both platforms, and
+// getting that wrong on a multi-homed box is the classic silent failure:
+// traffic leaves via the default route and nothing appears on the link you were
+// watching. The reference Windows machine has a 10G Mellanox and a Hyper-V
+// vSwitch; a Linux workstation with Docker on it has docker0 and a bridge per
+// compose network, all up and all multicast-capable. The selector is not
+// optional on either -- see docs/04-pacing-and-network.md.
 #pragma once
 
 #include <cstdint>
@@ -43,6 +46,16 @@ std::vector<NetInterface> enumerateInterfaces(bool includeDown = false);
 
 // Look one up by its IPv4 address, for restoring a saved selection.
 bool findInterfaceByIp(const std::string& ipv4, NetInterface& out);
+
+// Look one up by its interface name -- "ens18", "eth0". The CLI takes either
+// form for --iface, because on Linux the name is what everything else on the
+// machine calls it and making someone read an address out of `ip addr` first
+// is needless friction.
+bool findInterfaceByName(const std::string& name, NetInterface& out);
+
+// Order for presentation: up before down, physical before virtual, fastest
+// first, loopback last. Shared by both platforms' enumerators.
+void sortInterfaces(std::vector<NetInterface>& out);
 
 // Basic validation for the GUI's address fields.
 bool isValidMulticastGroup(const std::string& ipv4);
