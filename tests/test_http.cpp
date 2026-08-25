@@ -23,6 +23,9 @@ struct Server {
         port = s.port();
         return port != 0;
     }
+    std::string why() const {
+        return s.error().empty() ? std::string("no reason given") : s.error();
+    }
     HttpResult get(const std::string& target) {
         return httpRequest("127.0.0.1", port, "GET", target, {}, "application/json", 3000);
     }
@@ -48,7 +51,7 @@ TEST(http, url_decoding_handles_escapes_and_plus) {
 
 TEST(http, serves_a_route_and_reports_the_bound_port) {
     Server sv;
-    if (!sv.start()) SKIP("cannot bind a loopback port here");
+    if (!sv.start()) SKIP(("cannot bind a loopback port here: " + sv.why()).c_str());
     sv.s.route("GET", "/hello", [](const HttpRequest&, HttpResponse& res) {
         res.text("world");
     });
@@ -62,7 +65,7 @@ TEST(http, serves_a_route_and_reports_the_bound_port) {
 TEST(http, pattern_segments_capture_into_params) {
     // This is how IS-05 addresses a sender: .../single/senders/:id/staged
     Server sv;
-    if (!sv.start()) SKIP("cannot bind a loopback port here");
+    if (!sv.start()) SKIP(("cannot bind a loopback port here: " + sv.why()).c_str());
     sv.s.route("GET", "/x-nmos/connection/v1.1/single/senders/:id/staged",
                [](const HttpRequest& req, HttpResponse& res) {
                    res.text(req.params.at("id"));
@@ -78,7 +81,7 @@ TEST(http, cors_headers_are_on_every_response) {
     // these is simply invisible to them, and the failure looks like the node
     // not being there at all.
     Server sv;
-    if (!sv.start()) SKIP("cannot bind a loopback port here");
+    if (!sv.start()) SKIP(("cannot bind a loopback port here: " + sv.why()).c_str());
     sv.s.route("GET", "/thing", [](const HttpRequest&, HttpResponse& res) {
         res.json("{}");
     });
@@ -103,7 +106,7 @@ TEST(http, cors_headers_are_on_every_response) {
 
 TEST(http, the_right_status_for_the_wrong_method) {
     Server sv;
-    if (!sv.start()) SKIP("cannot bind a loopback port here");
+    if (!sv.start()) SKIP(("cannot bind a loopback port here: " + sv.why()).c_str());
     sv.s.route("GET", "/only-get", [](const HttpRequest&, HttpResponse& res) {
         res.text("yes");
     });
@@ -116,7 +119,7 @@ TEST(http, the_right_status_for_the_wrong_method) {
 
 TEST(http, head_returns_the_headers_without_the_body) {
     Server sv;
-    if (!sv.start()) SKIP("cannot bind a loopback port here");
+    if (!sv.start()) SKIP(("cannot bind a loopback port here: " + sv.why()).c_str());
     sv.s.route("GET", "/thing", [](const HttpRequest&, HttpResponse& res) {
         res.text("some body text");
     });
@@ -128,7 +131,7 @@ TEST(http, head_returns_the_headers_without_the_body) {
 
 TEST(http, a_patch_body_arrives_intact) {
     Server sv;
-    if (!sv.start()) SKIP("cannot bind a loopback port here");
+    if (!sv.start()) SKIP(("cannot bind a loopback port here: " + sv.why()).c_str());
     std::string seen;
     sv.s.route("PATCH", "/staged", [&](const HttpRequest& req, HttpResponse& res) {
         seen = req.body;
@@ -145,7 +148,7 @@ TEST(http, a_patch_body_arrives_intact) {
 
 TEST(http, a_query_string_is_split_from_the_path) {
     Server sv;
-    if (!sv.start()) SKIP("cannot bind a loopback port here");
+    if (!sv.start()) SKIP(("cannot bind a loopback port here: " + sv.why()).c_str());
     sv.s.route("GET", "/senders", [](const HttpRequest& req, HttpResponse& res) {
         res.text(req.path + "|" + req.query);
     });
@@ -156,7 +159,7 @@ TEST(http, a_query_string_is_split_from_the_path) {
 
 TEST(http, wildcard_routes_match_deeper_paths) {
     Server sv;
-    if (!sv.start()) SKIP("cannot bind a loopback port here");
+    if (!sv.start()) SKIP(("cannot bind a loopback port here: " + sv.why()).c_str());
     sv.s.route("GET", "/base/*", [](const HttpRequest&, HttpResponse& res) {
         res.text("matched");
     });
@@ -168,7 +171,7 @@ TEST(http, concurrent_requests_are_all_served) {
     // Four worker threads sit behind one accept loop; a registry heartbeat and
     // a controller poll do arrive together.
     Server sv;
-    if (!sv.start()) SKIP("cannot bind a loopback port here");
+    if (!sv.start()) SKIP(("cannot bind a loopback port here: " + sv.why()).c_str());
     sv.s.route("GET", "/ping", [](const HttpRequest&, HttpResponse& res) {
         res.text("pong");
     });
@@ -195,6 +198,10 @@ TEST(http, a_client_reports_an_unreachable_peer_rather_than_hanging) {
 
 TEST(http, free_port_probing_finds_something_usable) {
     const std::uint16_t p = firstFreePort("127.0.0.1", 49700, 20);
+    // Zero means the whole span was taken -- or, on a locked-down runner, that
+    // a loopback listener cannot be bound at all. Either is about the machine
+    // rather than about the probe.
+    if (p == 0) SKIP("no bindable loopback port in 49700-49719 here");
     CHECK(p >= 49700);
     CHECK(p < 49720);
 }

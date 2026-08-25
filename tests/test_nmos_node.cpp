@@ -68,6 +68,11 @@ struct Node {
     }
     ~Node() { backend->stop(); }
 
+    std::string why() const {
+        const std::string e = backend->status().error;
+        return e.empty() ? std::string("no reason given") : e;
+    }
+
     HttpResult get(const std::string& t) const {
         return httpRequest("127.0.0.1", port, "GET", t, {}, "application/json", 3000);
     }
@@ -84,7 +89,7 @@ struct Node {
 
 TEST(nmos_node, serves_the_is04_resource_chain) {
     Node n;
-    if (!n.start()) SKIP("cannot bind a loopback port here");
+    if (!n.start()) SKIP(("cannot start a node here: " + n.why()).c_str());
 
     // Every resource a controller walks, and the links between them. A broken
     // link is how a sender ends up listed but unroutable.
@@ -119,7 +124,7 @@ TEST(nmos_node, serves_the_is04_resource_chain) {
 
 TEST(nmos_node, the_grain_rate_is_an_exact_rational) {
     Node n;
-    if (!n.start()) SKIP("cannot bind a loopback port here");
+    if (!n.start()) SKIP(("cannot start a node here: " + n.why()).c_str());
     const Json flow = n.json(n.nodeBase + "/flows/" +
         n.json(n.nodeBase + "/senders/" + n.senderId).at("flow_id").asString());
     CHECK_EQ(flow.at("grain_rate").at("numerator").asInt(), std::int64_t(25));
@@ -128,7 +133,7 @@ TEST(nmos_node, the_grain_rate_is_an_exact_rational) {
 
 TEST(nmos_node, the_sender_carries_a_bcp_002_group_hint) {
     Node n;
-    if (!n.start()) SKIP("cannot bind a loopback port here");
+    if (!n.start()) SKIP(("cannot start a node here: " + n.why()).c_str());
     const Json sender = n.json(n.nodeBase + "/senders/" + n.senderId);
     const Json& tags = sender.at("tags");
     CHECK(tags.has("urn:x-nmos:tag:grouphint/v1.0"));
@@ -145,7 +150,7 @@ TEST(nmos_node, the_label_carries_the_loaded_format) {
     // in the label -- and deliberately not in the UUID seed, because a UUID has
     // to outlive the thing it identifies changing.
     Node n;
-    if (!n.start()) SKIP("cannot bind a loopback port here");
+    if (!n.start()) SKIP(("cannot start a node here: " + n.why()).c_str());
     const Json sender = n.json(n.nodeBase + "/senders/" + n.senderId);
     CHECK(sender.at("label").asString().find("1080i25") != std::string::npos);
 }
@@ -165,7 +170,7 @@ TEST(nmos_node, ids_are_stable_across_a_restart) {
     std::string first;
     for (int pass = 0; pass < 2; ++pass) {
         Node n;
-        if (!n.startOn(port)) SKIP("cannot bind the pinned port");
+        if (!n.startOn(port)) SKIP(("cannot bind the pinned port: " + n.why()).c_str());
         if (pass == 0) first = n.senderId;
         else           CHECK_EQ(n.senderId, first);
     }
@@ -179,13 +184,13 @@ TEST(nmos_node, two_instances_on_different_ports_get_different_ids) {
     if (a == 0 || b == 0 || a == b) SKIP("no two free ports here");
 
     Node na, nb;
-    if (!na.startOn(a) || !nb.startOn(b)) SKIP("cannot bind the pinned ports");
+    if (!na.startOn(a) || !nb.startOn(b)) SKIP(("cannot bind the pinned ports: " + na.why()).c_str());
     CHECK_NE(na.senderId, nb.senderId);
 }
 
 TEST(nmos_node, is05_reports_constraints_staged_and_active) {
     Node n;
-    if (!n.start()) SKIP("cannot bind a loopback port here");
+    if (!n.start()) SKIP(("cannot start a node here: " + n.why()).c_str());
     const std::string base = n.connBase + "/single/senders/" + n.senderId;
 
     const Json constraints = n.json(base + "/constraints");
@@ -205,7 +210,7 @@ TEST(nmos_node, is05_reports_constraints_staged_and_active) {
 
 TEST(nmos_node, an_is05_patch_moves_the_sender) {
     Node n;
-    if (!n.start()) SKIP("cannot bind a loopback port here");
+    if (!n.start()) SKIP(("cannot start a node here: " + n.why()).c_str());
     const std::string base = n.connBase + "/single/senders/" + n.senderId;
 
     const auto r = n.patch(base + "/staged",
@@ -229,7 +234,7 @@ TEST(nmos_node, a_patch_is_a_merge_over_staged) {
     // IS-05 makes a PATCH a partial update: a field the body omits keeps its
     // staged value rather than being re-read from active.
     Node n;
-    if (!n.start()) SKIP("cannot bind a loopback port here");
+    if (!n.start()) SKIP(("cannot start a node here: " + n.why()).c_str());
     const std::string base = n.connBase + "/single/senders/" + n.senderId;
 
     CHECK_EQ(n.patch(base + "/staged",
@@ -246,7 +251,7 @@ TEST(nmos_node, a_rejected_activation_answers_500_not_200) {
     // A controller reads 200 as "the sender has moved". If the engine did not
     // come back up on the new group, 200 is a lie it will not find out about.
     Node n;
-    if (!n.start()) SKIP("cannot bind a loopback port here");
+    if (!n.start()) SKIP(("cannot start a node here: " + n.why()).c_str());
     { std::lock_guard<std::mutex> lk(n.m); n.applyError = "the engine did not start"; }
 
     const auto r = n.patch(n.connBase + "/single/senders/" + n.senderId + "/staged",
@@ -258,7 +263,7 @@ TEST(nmos_node, a_rejected_activation_answers_500_not_200) {
 
 TEST(nmos_node, scheduled_activation_is_refused_explicitly) {
     Node n;
-    if (!n.start()) SKIP("cannot bind a loopback port here");
+    if (!n.start()) SKIP(("cannot start a node here: " + n.why()).c_str());
     const auto r = n.patch(n.connBase + "/single/senders/" + n.senderId + "/staged",
         R"({"activation":{"mode":"activate_scheduled_absolute",)"
         R"("requested_time":"1700000000:0"}})");
@@ -268,7 +273,7 @@ TEST(nmos_node, scheduled_activation_is_refused_explicitly) {
 
 TEST(nmos_node, the_sdp_describes_a_single_leg_sender) {
     Node n;
-    if (!n.start()) SKIP("cannot bind a loopback port here");
+    if (!n.start()) SKIP(("cannot start a node here: " + n.why()).c_str());
     const std::string sdp =
         n.get(n.connBase + "/single/senders/" + n.senderId + "/transportfile").body;
 
@@ -296,7 +301,7 @@ TEST(nmos_node, a_redundant_pair_is_two_grouped_m_lines) {
     n.want.sourceIpB = "10.0.0.2";
     n.want.macB      = "02-00-5e-00-00-02";
     n.want.interfaceNameB = "eth1";
-    if (!n.start()) SKIP("cannot bind a loopback port here");
+    if (!n.start()) SKIP(("cannot start a node here: " + n.why()).c_str());
 
     const std::string sdp =
         n.get(n.connBase + "/single/senders/" + n.senderId + "/transportfile").body;
@@ -315,7 +320,7 @@ TEST(nmos_node, bulk_and_base_endpoints_are_reachable) {
     // Controllers probe their way down the tree; a missing intermediate listing
     // stops the walk before it reaches the sender.
     Node n;
-    if (!n.start()) SKIP("cannot bind a loopback port here");
+    if (!n.start()) SKIP(("cannot start a node here: " + n.why()).c_str());
     for (const std::string& path : {std::string("/"), std::string("/x-nmos"),
                                     n.nodeBase, n.connBase,
                                     n.connBase + "/single",

@@ -100,7 +100,17 @@ What is covered, and why those things:
 | `common_misc` | Multicast address validation, interface ordering, the pacer's rate arithmetic, settings persistence, the status panel |
 
 Cases that need the network `SKIP` with a reason rather than failing, so a
-runner with no multicast says so instead of going red.
+runner with no multicast says so instead of going red. Two known gaps are
+skipped rather than quietly asserted, so they stay visible on every run:
+
+- The GitHub Windows runner cannot bind a loopback listener at all, so the
+  `http` and `nmos_node` suites do not execute there. They are the two that most
+  want a second platform, and this is the outstanding hole in the coverage.
+- `mdns_wire`'s withdrawal case is Linux only, and that is a statement about the
+  product. Removal is implemented in the POSIX browse engine, which parses the
+  records itself and sees a PTR arrive at TTL 0. The Windows engine wraps
+  `DnsServiceBrowse`, whose callback surfaces discoveries rather than
+  withdrawals, so a departed registry stays in `found()` there — worth fixing.
 
 Writing them turned up four things: a receiver-side SD parser that had never
 produced a frame, an mDNS browser that handled a goodbye internally but never
