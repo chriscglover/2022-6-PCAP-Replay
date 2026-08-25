@@ -107,7 +107,10 @@ public:
         int                        strideBytes = 0;
         bool                       interlaced = false;
         std::uint64_t              frameIndex = 0;
-        int                        linesRecovered = 0;   // of totalLines
+        // Active picture lines written into `uyvy`, so it counts up to
+        // activeHeight -- not to totalLines, which includes blanking. A frame
+        // with fewer than activeHeight had lines lost somewhere upstream.
+        int                        linesRecovered = 0;
         int                        crcErrors = 0;
     };
 
@@ -153,6 +156,14 @@ private:
     bool                       haveFrame_ = false;
     int                        crcErrors_ = 0;
     int                        lineErrors_ = 0;
+
+    // SD raster position. ST 259 carries no line number in the EAV -- that is a
+    // ST 292 addition -- so on SD the position has to be counted across lines
+    // and re-anchored from the F and V bits, rather than simply read off each
+    // line the way HD allows.
+    int                        sdEndedLine_ = 0;
+    bool                       sdAnchored_  = false;
+    int                        sdPrevV_     = -1;   // -1 = no line seen yet
     std::uint64_t              framesEmitted_ = 0;
     std::vector<std::uint8_t>  bytes_;        // group-aligned once phaseKnown_
 };

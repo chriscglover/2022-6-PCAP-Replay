@@ -243,6 +243,9 @@ void SdiStreamParser::reset(SdiFormat format) {
     crcErrors_ = 0;
     lineErrors_ = 0;
     framesEmitted_ = 0;
+    sdEndedLine_ = 0;
+    sdAnchored_ = false;
+    sdPrevV_ = -1;
 
     current_ = Frame{};
     current_.format = fi_.id;
@@ -352,10 +355,37 @@ void SdiStreamParser::consumeLine(std::span<const std::uint16_t> unit,
         // "the path is corrupting data".
         (void)post;
     } else {
-        // SD carries no line number; track position from the V transition.
+        // SD carries no line number, so the raster position is counted across
+        // lines rather than read off each one.
+        //
+        // The anchor is the V bit falling. The first EAV of a field with V
+        // clear terminates that field's first active line, and F says which
+        // field it is, so the format table supplies the line number outright.
+        // Between anchors the counter simply advances, wrapping at the end of
+        // the raster.
+        //
+        // What was here before could not work: `endedLine` is a local, so it
+        // was zero on entry to every line and `++endedLine` could only ever
+        // make it 1. activeRowForLine() then returned -1 for ever, because
+        // line 1 or 2 of an SD raster is vertical blanking -- so haveFrame_
+        // was never set, the increment it was guarded by never ran, and SD
+        // never produced a single frame. Only ever exercised through the
+        // receiver this app does not build, which is why it went unnoticed.
         const std::uint16_t xyz = unit[3];
         const bool v = (xyz & 0x080) != 0;
-        if (!v && haveFrame_) ++endedLine;
+        const bool f = (xyz & 0x100) != 0;
+        if (!v && sdPrevV_ == 1) {
+            sdEndedLine_ = f ? fi_.activeStartF2 : fi_.activeStartF1;
+            sdAnchored_  = true;
+        } else if (sdAnchored_) {
+            if (++sdEndedLine_ > fi_.totalLines) sdEndedLine_ = 1;
+        }
+        sdPrevV_ = v ? 1 : 0;
+        // Before the first anchor the position is genuinely unknown, and
+        // writing a line to a guessed row would corrupt the picture rather
+        // than merely delay it.
+        if (!sdAnchored_) return;
+        endedLine = sdEndedLine_;
     }
 
     const int activeLine = endedLine + 1;
