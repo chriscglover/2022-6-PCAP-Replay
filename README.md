@@ -103,9 +103,8 @@ Cases that need the network `SKIP` with a reason rather than failing, so a
 runner with no multicast says so instead of going red. Two known gaps are
 skipped rather than quietly asserted, so they stay visible on every run:
 
-- The GitHub Windows runner cannot bind a loopback listener at all, so the
-  `http` and `nmos_node` suites do not execute there. They are the two that most
-  want a second platform, and this is the outstanding hole in the coverage.
+- Anything needing a socket skips where the machine will not carry it, naming
+  the error rather than reporting a bare "cannot bind".
 - `mdns_wire`'s withdrawal case is Linux only, and that is a statement about the
   product. Removal is implemented in the POSIX browse engine, which parses the
   records itself and sees a PTR arrive at TTL 0. The Windows engine wraps

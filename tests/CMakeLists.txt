@@ -10,6 +10,9 @@ add_executable(pcapreplay_tests ${PCAPREPLAY_TEST_SOURCES})
 target_link_libraries(pcapreplay_tests PRIVATE pcapreplay_common pcapreplay_nmos)
 target_include_directories(pcapreplay_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
+    # platform.h, for the SocketScope that starts Winsock. Without it every
+    # socket call on Windows fails with WSANOTINITIALISED.
+    "${CMAKE_SOURCE_DIR}/common/include"
     # mdns_internal.h -- the record interpretation shared by both platforms'
     # browse engines is worth testing directly rather than only through a live
     # browse, which needs a network.
