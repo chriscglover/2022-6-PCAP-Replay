@@ -549,7 +549,14 @@ void PcapSource::run(PcapSourceConfig cfg) {
         const double dt = std::chrono::duration<double>(now - lastReport).count();
         if (dt >= 0.25) {
             const std::uint64_t total = A.bytesRead() + (haveB ? B.bytesRead() : 0);
-            publish(double(total - lastBytes) * 8.0 / 1e6 / dt, A.progress());
+            // A rewind resets each leg's byte count, so `total` goes backwards
+            // at every loop and an unsigned subtraction wraps to something near
+            // 2^64 -- which reached the status panel as a read rate of several
+            // hundred trillion Mb/s. Taking `total` itself across a rewind is
+            // right as well as safe: it is exactly the bytes read since the
+            // file was reopened, which is the interval being measured.
+            const std::uint64_t delta = total >= lastBytes ? total - lastBytes : total;
+            publish(double(delta) * 8.0 / 1e6 / dt, A.progress());
             lastBytes = total;
             lastReport = now;
         }
