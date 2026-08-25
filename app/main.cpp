@@ -851,6 +851,21 @@ INT_PTR CALLBACK dlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         return TRUE;
 
     case WM_CLOSE:
+        // Remember the configuration on the way out.
+        //
+        // Until now this happened only in doStart(), so a session that never
+        // pressed Start was forgotten entirely -- which is an ordinary way to
+        // use this app, because a controller can activate the sender over IS-05
+        // without anyone touching the Start button.
+        //
+        // The cost was not just retyping the paths. With no remembered capture,
+        // the box is empty at the next launch, so describeFiles() returns early
+        // with nothing to probe and app.probedFormat stays empty -- and the NMOS
+        // source, flow and sender then register with labels that have no format
+        // in them. Opening a capture afterwards fixes it, which is why the
+        // format appeared only once the NMOS box had been toggled: that is
+        // simply the first moment the node had been given a format at all.
+        saveSettings(dlg, *app, configFrom(dlg, *app));
         app->nmos->stop();
         app->engine.stop();
         app->stats.stop();
