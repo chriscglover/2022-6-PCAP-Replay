@@ -1,9 +1,12 @@
 // Per-application settings, persisted to an INI beside the user's profile.
 //
-// Backed by the Win32 profile API, so there is no dependency and no parser to
-// get wrong. Writes are immediate.
+// One [config] section of key=value, which is what the Win32 profile API writes
+// and what the POSIX build parses, so a file is readable by either. Writes are
+// immediate.
 //
-//   %APPDATA%\PCAP Replay\<app>.ini
+//   Windows   %APPDATA%\PCAP Replay\<app>.ini
+//   Linux     $XDG_CONFIG_HOME/pcap-replay/<app>.ini,
+//             or ~/.config/pcap-replay/<app>.ini
 #pragma once
 
 #include <string>

@@ -1,9 +1,10 @@
 // Multicast transmit and receive sockets.
 //
 // The interface is selected explicitly on both send and receive. On a
-// multi-homed Windows box the default route wins otherwise, and the failure is
-// silent -- traffic simply leaves via the wrong NIC. This machine has a 10G
-// Mellanox alongside a Hyper-V vSwitch, so that is not a hypothetical.
+// multi-homed box the default route wins otherwise, and the failure is silent --
+// traffic simply leaves via the wrong NIC. The reference Windows machine has a
+// 10G Mellanox alongside a Hyper-V vSwitch and the Linux one has two datacentre
+// NICs plus a docker bridge, so that is not a hypothetical on either.
 #pragma once
 
 #include <cstdint>
@@ -11,19 +12,14 @@
 #include <string>
 #include <vector>
 
+#include "pcapreplay/platform.h"
+
 namespace pcapreplay {
 
-// Winsock startup/shutdown, reference counted. Construct one per app.
-class WinsockScope {
-public:
-    WinsockScope();
-    ~WinsockScope();
-    WinsockScope(const WinsockScope&) = delete;
-    WinsockScope& operator=(const WinsockScope&) = delete;
-    bool ok() const { return ok_; }
-private:
-    bool ok_ = false;
-};
+// Winsock startup/shutdown on Windows, a no-op shell on POSIX. Construct one
+// per app. The old name is kept because it is what the call sites say and it is
+// still accurate on the platform where it does something.
+using WinsockScope = SocketScope;
 
 struct MulticastEndpoint {
     std::string   group;          // e.g. "239.0.0.1"
@@ -77,10 +73,17 @@ public:
     std::uint64_t      datagramsSent() const { return sent_; }
     std::uint64_t      sendErrors()    const { return errors_; }
 
+    // Empty unless the kernel gave us a smaller send buffer than open() asked
+    // for, in which case this says so in a form fit to print. Linux clamps
+    // SO_SNDBUF to net.core.wmem_max silently, and a silent clamp shows up later
+    // as spacing jitter that gets blamed on the application.
+    std::string bufferShortfall(int asked = 8 * 1024 * 1024) const;
+
 private:
     std::uintptr_t sock_ = ~0ull;
     std::vector<std::uint8_t> dstAddr_;   // sockaddr_in
     int            segmentBytes_ = 0;
+    int            sendBufferBytes_ = 0;  // what the kernel actually granted
     std::string    lastError_;
     std::uint64_t  sent_ = 0;
     std::uint64_t  errors_ = 0;
@@ -137,6 +140,7 @@ private:
     std::uint64_t  received_ = 0;
 };
 
-std::string winsockErrorText(int code);
+// Kept as the name the call sites use; socketErrorText() is the portable one.
+inline std::string winsockErrorText(int code) { return socketErrorText(code); }
 
 }  // namespace pcapreplay

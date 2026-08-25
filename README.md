@@ -18,29 +18,48 @@ Everything the original replay did still works: indefinite looping with fresh
 RTP and HBRMT headers so the loop join is invisible, live timecode rewriting,
 and random impairments for exercising a receiver.
 
-Deployment is one `.exe`. No Conan, no vcpkg, no Bonjour SDK, no .NET, no GPU.
+Runs on **Windows** as a dialog application and on **Linux** as a command line
+tool, from one codebase. Deployment is one binary either way. No Conan, no
+vcpkg, no Bonjour SDK, no Avahi, no libpcap, no .NET, no GPU.
 
 ## Requirements
 
-**To run: copy `pcap_replay.exe` and double-click it.** There is nothing to
-install.
+**Windows — copy `pcap_replay.exe` and double-click it. Linux — copy
+`replay_cli` and run it.** There is nothing to install on either.
 
 | | |
 |---|---|
 | Visual C++ Redistributable | **Not needed.** Linked against the static CRT (`/MT`), so there is no `VCRUNTIME140.dll` or `MSVCP140.dll` to ship. |
 | .NET | **Not needed.** Native C++ throughout. |
 | Bonjour / mDNSResponder | **Not needed.** DNS-SD uses the Windows API in `dnsapi.dll`, not Apple's SDK or service. |
-| OS | Windows 10 version 1703 or later, x64. The floor is `DnsServiceBrowse`/`DnsServiceRegister`, which arrived in 1703. |
+| OS | Windows 10 version 1703 or later, x64 — the floor is `DnsServiceBrowse`/`DnsServiceRegister`, which arrived in 1703. Or Linux on x86-64: kernel 3.9+ for `SO_REUSEPORT`, and 4.18+ to get segmentation offload, which is probed at runtime and not required. |
 | CPU | Any x64. AVX2 is used for the 10-bit packing hot loops but is probed at runtime with a scalar fallback, so it is not required. |
 | Disk | Fast enough to stream the capture. 1080i25 needs ~190 MB/s per leg, so ~380 MB/s for a `-7` pair. Any NVMe is comfortable; measure yours with `replay_cli --ingest`. |
 
-The only libraries linked are Windows SDK ones — `ws2_32`, `iphlpapi`, `winmm`,
-`dnsapi`, `comctl32` — all present on any Windows install. `dumpbin /dependents`
-on the shipped binary lists nothing else.
+On Windows the only libraries linked are Windows SDK ones — `ws2_32`,
+`iphlpapi`, `winmm`, `dnsapi`, `comctl32` — all present on any Windows install.
+`dumpbin /dependents` on the shipped binary lists nothing else.
 
-**To build** you need Visual Studio 2022 or later with the C++ workload, and
-CMake 3.24+. Visual Studio's bundled CMake is sufficient. No package manager and
-no external SDK.
+On Linux the only libraries linked are libc, libstdc++ and libpthread:
+
+```
+$ ldd build/bin/replay_cli
+    linux-vdso.so.1
+    libstdc++.so.6 => /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+    libgcc_s.so.1  => /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+    libc.so.6      => /usr/lib/x86_64-linux-gnu/libc.so.6
+    libm.so.6      => /usr/lib/x86_64-linux-gnu/libm.so.6
+```
+
+No libpcap — the capture reader is first-party. No Avahi and no D-Bus — see
+[DNS-SD without a daemon](#dns-sd-without-a-daemon). That is what lets this run
+in a container with nothing else in it, which is where most NMOS nodes live.
+
+**To build on Windows** you need Visual Studio 2022 or later with the C++
+workload, and CMake 3.24+. Visual Studio's bundled CMake is sufficient.
+
+**To build on Linux** you need a C++20 compiler and `make`. Nothing else — no
+package manager, no external SDK, and CMake is optional.
 
 Two things the app does need from the *network*, rather than the machine:
 
@@ -59,6 +78,7 @@ routed by a controller to a hardware ST 2022-6 receiver, and decoded.
 
 | Component | State |
 |-----------|-------|
+| Linux build and replay | ✅ Proven — 1080i25 at 100.0% of target packet rate, registered with a live registry, taken by a controller onto a hardware receiver bank and decoded |
 | pcap ingest, format detection, marker-bit frame cutting, raster validation | ✅ Proven on 1080i25 and 625i25 captures |
 | ST 2022-7 two-leg merge | ✅ Proven — recovers datagrams missing from one leg |
 | Streaming ring buffer at line rate | ✅ Proven — 129 fps merged against 25 fps needed |
@@ -75,6 +95,8 @@ routed by a controller to a hardware ST 2022-6 receiver, and decoded.
 
 ## Quick start
 
+### Windows
+
 ```powershell
 cmake -S . -B build -G "Visual Studio 18 2026" -A x64
 cmake --build build --config Release
@@ -83,6 +105,170 @@ cmake --build build --config Release
 
 Pick a red capture, optionally a blue one, choose the multicast groups and the
 NIC for each path, and press Start.
+
+### Linux
+
+```bash
+make -j                        # or: cmake -S . -B build && cmake --build build
+./build/bin/replay_cli --interfaces
+
+./build/bin/replay_cli red.pcap blue.pcap \
+    --group 239.2.2.2 --port 40000 --iface ens18 \
+    --nmos --registry 10.0.0.5:3210
+```
+
+`--iface` takes an interface name or an address, and is worth giving: without it
+multicast leaves by the default route, which on a machine with Docker installed
+is very often a bridge rather than the wire. `--interfaces` lists them in the
+order the GUI's dropdown uses — physical before virtual, fastest first — so
+the top entry is nearly always the right one.
+
+`replay_cli --help` lists everything the dialog offers: the per-path NIC and
+group, TTL, fault injection, the NMOS configuration, and the status panel.
+
+## Linux
+
+The Linux build is the same engines with the dialog removed, not a rewrite. Every
+file in `common/` and `nmos/` is shared; what differs is confined to the four
+things the two operating systems genuinely disagree about — sockets, timing,
+interface enumeration and DNS-SD — and `common/include/pcapreplay/platform.h`
+is where the first of those is stated once.
+
+### DNS-SD without a daemon
+
+Windows has `DnsServiceBrowse`/`DnsServiceRegister` in `dnsapi.dll`. Linux has no
+equivalent in libc, and the usual answer — link `libavahi-client` — costs the
+property that makes this thing deployable: it adds a build dependency, a runtime
+`.so`, and a requirement that `avahi-daemon` and D-Bus are both alive wherever it
+runs. In a container that is not true without extra work, and a node that will
+not start in a container is a node that will not start.
+
+So `nmos/src/mdns_posix.cpp` speaks multicast DNS itself, from RFC 6762 and
+RFC 6763: PTR queries with the exponential back-off section 5.2 asks for, SRV,
+TXT and A follow-ups for anything a responder did not volunteer, and a responder
+of its own that announces twice at startup (section 8.3) and sends a TTL 0
+goodbye at shutdown (section 10.1), so a controller drops the node when it goes
+rather than listing a sender that is not there.
+
+**It coexists with `avahi-daemon` rather than competing with it.** The socket
+takes `SO_REUSEADDR` and `SO_REUSEPORT` on 5353, and the kernel delivers each
+multicast datagram to every socket joined to the group, so both processes see all
+the traffic. The A record is published under `pcap-replay-<host>-<port>.local`
+rather than `<host>.local`, because Avahi is already authoritative for the
+latter and publishing a second answer for a name someone else owns is a conflict
+— not a fight worth having for a record that exists only to point an SRV
+somewhere. If 5353 cannot be shared at all, browsing falls back to a private port
+and the unicast-response bit, which still finds registries; advertising cannot,
+and says so rather than failing silently.
+
+Verified against Avahi as an independent implementation: `avahi-browse -r
+_nmos-node._tcp` resolves the instance, host, address, port and all nine TXT
+records, and the entry disappears from Avahi's cache when the process is stopped.
+
+What is deliberately not implemented: probing and conflict resolution (sections
+8.1 and 9), and known-answer suppression. Every name published here already
+carries the host name and the node port, which is the same thing that makes the
+NMOS resource UUIDs unique; the suppressions are politeness optimisations for a
+busy link, and one service instance and a query a minute is not what they exist
+to protect against.
+
+### Pacing
+
+The structure is unchanged — absolute scheduling against a monotonic clock,
+never incremental, coarse waits sleeping and the last few microseconds spinning.
+`CLOCK_MONOTONIC` replaces `QueryPerformanceCounter` and is a vDSO read of the
+TSC with no syscall, which matters on a path read tens of thousands of times a
+second.
+
+Linux sleeps far more accurately than Windows does: `clock_nanosleep` against an
+absolute deadline lands within tens of microseconds, against Windows' 1—15 ms.
+The spin threshold is therefore an order of magnitude tighter (150 us against
+1.5 ms), so more packets are placed by sleeping to them and fewer by burning CPU.
+
+Measured on 1080i25: **134,925 packets/sec sustained at 100.0% of target**, 25.00
+frames/sec, zero repeated frames over a 280-second run.
+
+`SCHED_FIFO` is the equivalent of `THREAD_PRIORITY_TIME_CRITICAL` and needs
+`CAP_SYS_NICE`, which this tool does not demand. Unprivileged replay works and is
+what the numbers above were measured with; it is simply more exposed to what else
+the machine is doing. To grant it without running as root:
+
+```bash
+sudo setcap cap_sys_nice=eip ./build/bin/replay_cli
+```
+
+### Segmentation offload
+
+Windows spells it `UDP_SEND_MSG_SIZE`, Linux spells it `UDP_SEGMENT` (generic
+segmentation offload, kernel 4.18+). Both are set once on the socket, so one
+`sendto()` hands the stack a buffer of many fixed-size datagrams and it splits
+them — which is what makes ST 2022-6 packet rates reachable from a single
+thread. Either can refuse, so the result is probed and `sendMany()` falls back to
+a loop of `send()`.
+
+Note that `tcpdump` on the sending host shows the *pre-segmentation* aggregate
+— 64400-byte datagrams rather than 1400 — for the same reason it shows TSO
+aggregates for TCP. A receiver sees 1400 bytes. Capture on the receiving side, or
+on a tap, if that distinction matters.
+
+One Linux-specific wrinkle is reported rather than hidden: `SO_SNDBUF` is clamped
+to `net.core.wmem_max` without an error, and the stock 212 kB is a fifth of what
+is asked for here. The granted size is read back and, if short, said out loud
+— a silent clamp shows up later as spacing jitter that gets blamed on the
+application.
+
+### Choosing the interface
+
+The single most common way to get nothing on the wire is to send out of the wrong
+NIC, and on Linux the answer is less obvious than on Windows: a machine with
+Docker installed has `docker0` and a bridge per compose network, all up, all
+multicast-capable, and several of them reporting a link speed the real NIC does
+not. `--interfaces` lists them physical-before-virtual and fastest-first, marking
+bridges and tunnels as virtual, so sorting on speed alone cannot put a bridge at
+the top.
+
+### Running it as a service
+
+`SIGINT`, `SIGTERM` and `SIGHUP` all unwind cleanly: the node deregisters from the
+registry with an IS-04 `DELETE` and the responder sends its mDNS goodbye before
+the process exits. A replay that is killed without unwinding leaves a sender in
+the registry that is not there, which is exactly the failure this tool exists to
+help diagnose.
+
+```ini
+[Unit]
+Description=ST 2022-6 replay
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/replay_cli /srv/captures/red.pcap /srv/captures/blue.pcap \
+          --group 239.2.2.2 --port 40000 --iface ens18 \
+          --nmos --registry 10.0.0.5:3210 --quiet
+AmbientCapabilities=CAP_SYS_NICE
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`--idle` registers the sender but does not transmit until a controller activates
+it over IS-05, which is usually what you want from a service.
+
+### Reading the capture off disk
+
+The disk requirement is the same on both platforms and is the thing most likely
+to bite: 1080i25 needs ~190 MB/s per leg, so ~380 MB/s for a `-7` pair. Measure
+before blaming anything else:
+
+```bash
+./build/bin/replay_cli red.pcap blue.pcap --ingest 30
+```
+
+On a machine whose disk cannot keep up, the transmitter repeats the current frame
+rather than stalling — a gap on the wire reads to a receiver as a fault, whereas
+a repeated frame keeps the packet rate and the RTP sequence continuous — and the
+repeat count is shown so it stays visible rather than silent. Measured 292 fps
+single-leg with the capture in page cache, against the 25 needed.
 
 ## Why re-originate rather than replay the packets
 
@@ -332,7 +518,7 @@ sender:
 ## Command line
 
 `replay_cli` drives the same engines without the dialog, for scripting and
-measurement.
+measurement. On Linux it is the whole product; `--help` lists every option.
 
 ```powershell
 # is an NMOS registry discoverable from this machine? (needs no capture)
@@ -394,9 +580,17 @@ NULL/loopback link types are all handled.
 | Path | What is in it |
 |------|---------------|
 | `common/` | SDI format tables, 10-bit packing, CRC, HBRMT/RTP, multicast, pacer, the pcap source and the replay engine |
+| `common/include/pcapreplay/platform.h` | the whole of the Winsock/Berkeley sockets difference, stated once |
 | `nmos/` | JSON, HTTP server and client, DNS-SD, and the IS-04/IS-05 node |
-| `app/` | the Win32 dialog |
-| `tools/` | `replay_cli` |
+| `nmos/src/mdns_win.cpp` | DNS-SD on `dnsapi.dll` |
+| `nmos/src/mdns_posix.cpp` | DNS-SD spoken directly over UDP 5353 |
+| `app/` | the Win32 dialog. Not built on Linux |
+| `tools/` | `replay_cli` — the whole product on Linux |
+
+Files whose name ends `_win` or `_posix` are compiled on both platforms and are
+empty on the one they are not for, so neither can rot unnoticed behind a
+generator expression. Everything else is shared, with `#ifdef` only where the two
+platforms genuinely disagree.
 
 `common/` is the earlier `st2022_common` with the live-video half removed and
 the namespace renamed to `pcapreplay`.

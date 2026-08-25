@@ -11,7 +11,12 @@
 #include "pcapreplay/bitpack.h"
 
 #include <immintrin.h>
+#ifdef _MSC_VER
 #include <intrin.h>
+#else
+// The same instruction, a different spelling.
+#define _byteswap_uint64(x) __builtin_bswap64(x)
+#endif
 
 #include <cstring>
 

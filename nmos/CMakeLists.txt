@@ -12,9 +12,21 @@ add_library(pcapreplay_nmos STATIC
     src/json.cpp
     src/http.cpp
     src/mdns.cpp
+    src/mdns_win.cpp
+    src/mdns_posix.cpp
     src/uuid.cpp
     src/nmos_node.cpp
+    src/status_text.cpp
 )
 
+# Both mdns_*.cpp files are compiled on both platforms and each is empty on the
+# one it is not for. Listing them unconditionally means neither can rot unnoticed
+# behind a generator expression.
 target_include_directories(pcapreplay_nmos PUBLIC include)
-target_link_libraries(pcapreplay_nmos PRIVATE ws2_32 dnsapi)
+# For common/platform.h -- the socket layer is shared, not duplicated.
+target_include_directories(pcapreplay_nmos PRIVATE ${CMAKE_SOURCE_DIR}/common/include)
+if(WIN32)
+    target_link_libraries(pcapreplay_nmos PRIVATE ws2_32 dnsapi)
+else()
+    target_link_libraries(pcapreplay_nmos PRIVATE pcapreplay_common Threads::Threads)
+endif()

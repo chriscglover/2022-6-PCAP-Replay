@@ -1,9 +1,14 @@
-// DNS-SD browse and advertise, on the Windows native API.
+// DNS-SD browse and advertise.
 //
-// Uses DnsServiceBrowse/DnsServiceResolve/DnsServiceRegister from dnsapi.dll
-// (Windows 10 1703 and later) rather than Apple's Bonjour SDK. That keeps the
-// app dependency-free and installable by copying it -- the Bonjour SDK is a
-// gated download and its runtime is a separate install on every machine.
+// Dependency-free on both platforms, and deliberately so: the deployment is one
+// binary with nothing to install beside it. Windows uses
+// DnsServiceBrowse/Resolve/Register from dnsapi.dll (Windows 10 1703 and later)
+// rather than Apple's Bonjour SDK, which is a gated download and a separate
+// runtime install on every machine. Linux has no libc equivalent to call at all,
+// so mdns_posix.cpp speaks multicast DNS itself rather than linking Avahi's
+// client library and requiring avahi-daemon and D-Bus to be alive -- which they
+// are not in a container without extra work, and a container is where most of
+// these run. Both coexist with whatever mDNS stack the machine already has.
 //
 // Two directions, both of which NMOS needs:
 //

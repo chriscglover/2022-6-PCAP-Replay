@@ -642,25 +642,25 @@ void BuiltinNode::installRoutes() {
     };
 
     // Base listings. A controller walks these, so they have to be right.
-    server_.route("GET", "/", [=](const HttpRequest&, HttpResponse& res) {
+    server_.route("GET", "/", [=, this](const HttpRequest&, HttpResponse& res) {
         ok(res, listing({"x-nmos/"}));
     });
-    server_.route("GET", "/x-nmos", [=](const HttpRequest&, HttpResponse& res) {
+    server_.route("GET", "/x-nmos", [=, this](const HttpRequest&, HttpResponse& res) {
         ok(res, listing({"node/", "connection/"}));
     });
-    server_.route("GET", "/x-nmos/node", [=](const HttpRequest&, HttpResponse& res) {
+    server_.route("GET", "/x-nmos/node", [=, this](const HttpRequest&, HttpResponse& res) {
         ok(res, listing({(nv + "/").c_str()}));
     });
-    server_.route("GET", "/x-nmos/connection", [=](const HttpRequest&, HttpResponse& res) {
+    server_.route("GET", "/x-nmos/connection", [=, this](const HttpRequest&, HttpResponse& res) {
         ok(res, listing({(cv + "/").c_str()}));
     });
 
     // ---- IS-04 Node API ---------------------------------------------------
-    server_.route("GET", nodeBase, [=](const HttpRequest&, HttpResponse& res) {
+    server_.route("GET", nodeBase, [=, this](const HttpRequest&, HttpResponse& res) {
         ok(res, listing({"self/", "sources/", "flows/", "devices/",
                          "senders/", "receivers/"}));
     });
-    server_.route("GET", nodeBase + "/self", [=](const HttpRequest&, HttpResponse& res) {
+    server_.route("GET", nodeBase + "/self", [=, this](const HttpRequest&, HttpResponse& res) {
         std::lock_guard<std::mutex> lk(mutex_);
         ok(res, nodeResource());
     });
@@ -680,7 +680,7 @@ void BuiltinNode::installRoutes() {
     collection("senders", [this] { return senderResource(); });
 
     server_.route("GET", nodeBase + "/receivers",
-                  [=](const HttpRequest&, HttpResponse& res) {
+                  [=, this](const HttpRequest&, HttpResponse& res) {
         ok(res, Json::array());   // this app sends only
     });
 
@@ -698,14 +698,14 @@ void BuiltinNode::installRoutes() {
     single04("senders", [this] { return senderResource(); }, [this] { return senderId_; });
 
     // ---- IS-05 Connection API ---------------------------------------------
-    server_.route("GET", connBase, [=](const HttpRequest&, HttpResponse& res) {
+    server_.route("GET", connBase, [=, this](const HttpRequest&, HttpResponse& res) {
         ok(res, listing({"bulk/", "single/"}));
     });
-    server_.route("GET", connBase + "/single", [=](const HttpRequest&, HttpResponse& res) {
+    server_.route("GET", connBase + "/single", [=, this](const HttpRequest&, HttpResponse& res) {
         ok(res, listing({"senders/", "receivers/"}));
     });
     server_.route("GET", connBase + "/single/receivers",
-                  [=](const HttpRequest&, HttpResponse& res) {
+                  [=, this](const HttpRequest&, HttpResponse& res) {
         ok(res, Json::array());
     });
     server_.route("GET", connBase + "/single/senders",
@@ -715,7 +715,7 @@ void BuiltinNode::installRoutes() {
         a.push(Json(senderId_ + "/"));
         ok(res, a);
     });
-    server_.route("GET", single, [=](const HttpRequest& req, HttpResponse& res) {
+    server_.route("GET", single, [=, this](const HttpRequest& req, HttpResponse& res) {
         if (!isSender(req)) { notFound(res); return; }
         ok(res, listing({"constraints/", "staged/", "active/",
                          "transportfile/", "transporttype/"}));
@@ -723,7 +723,7 @@ void BuiltinNode::installRoutes() {
     // IS-05 v1.1 requires this alongside the others. It reports the transport
     // class, not the sub-classification, so it is rtp rather than rtp.mcast.
     server_.route("GET", single + "/transporttype",
-                  [=](const HttpRequest& req, HttpResponse& res) {
+                  [=, this](const HttpRequest& req, HttpResponse& res) {
         if (!isSender(req)) { notFound(res); return; }
         ok(res, Json("urn:x-nmos:transport:rtp"));
     });
