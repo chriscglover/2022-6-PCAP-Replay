@@ -1,0 +1,174 @@
+# Build both platforms on every push.
+#
+# This exists because of a specific failure. The Linux port split mdns.cpp into
+# a shared half and two per-platform halves, and left a stray brace in the
+# Windows one that closed its namespace two hundred lines early. Linux never
+# noticed -- mdns_win.cpp is wrapped in `#ifdef _WIN32` and compiles to nothing
+# there -- so the break reached main and was found only when someone next opened
+# Visual Studio. Every `#ifdef _WIN32` block in common/ and nmos/ has the same
+# property in reverse.
+#
+# One codebase targeting two platforms needs both compiled on every push, or
+# half of it is only ever checked by hand.
+#
+# Nothing is installed: no package manager, no external SDK, no vcpkg. That is a
+# property of the project rather than a shortcut here -- see the README.
+
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch cancels the first. These builds take about a
+# minute and nobody wants the answer to the previous commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The two build files are both supported and must both work. The Makefile is
+  # what the README tells a Linux user to run and needs only a compiler; CMake
+  # is what Windows uses and what packagers will reach for. Building only one
+  # lets the other rot.
+  linux:
+    name: Linux (${{ matrix.builder }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        builder: [make, cmake]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compiler version
+        run: g++ --version
+
+      # -Werror because the tree is warning-free today and the cheapest moment
+      # to deal with a new one is when it appears. If a compiler upgrade starts
+      # failing the build on something not worth fixing, drop the flag here
+      # rather than learning to skim the log.
+      - name: Build with make
+        if: matrix.builder == 'make'
+        run: make -j"$(nproc)" CXXFLAGS="-O2 -g -Werror"
+
+      # -Werror goes in via the CXXFLAGS environment variable rather than
+      # -DCMAKE_CXX_FLAGS, because the command-line form *replaces* the flags
+      # CMake initialises for the toolchain instead of adding to them. Harmless
+      # here and actively wrong on MSVC, where it would drop /EHsc -- so both
+      # jobs use the same mechanism to keep them honest.
+      - name: Build with CMake
+        if: matrix.builder == 'cmake'
+        env:
+          CXXFLAGS: -Werror
+        run: |
+          cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-cmake -j"$(nproc)"
+
+      - name: Smoke test
+        run: |
+          BIN=build/bin/replay_cli
+          [ "${{ matrix.builder }}" = cmake ] && BIN=build-cmake/bin/replay_cli
+          "$BIN" --help > /dev/null
+          # Interface enumeration reads getifaddrs and sysfs, so it exercises
+          # real code rather than only proving the binary starts.
+          "$BIN" --interfaces
+          # No arguments is the usage banner and exit 2, which is the contract
+          # a script calling this depends on.
+          if "$BIN"; then echo "expected exit 2 with no arguments"; exit 1; fi
+
+      - name: Linked libraries
+        if: matrix.builder == 'make'
+        run: |
+          ldd build/bin/replay_cli
+          # The deployment story is "copy one binary". If something ever pulls
+          # in libpcap, an mDNS client or an HTTP library, that stops being
+          # true, and it should fail here rather than in a container that will
+          # not start.
+          if ldd build/bin/replay_cli | grep -Eqi 'pcap|avahi|dbus|curl|ssl'; then
+            echo "unexpected dependency -- see the README on why this matters"
+            ldd build/bin/replay_cli
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.builder == 'make'
+        with:
+          name: replay_cli-linux-x86_64
+          path: build/bin/replay_cli
+          if-no-files-found: error
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # /WX for the same reason as -Werror above. The dialog is built here too,
+      # not just the CLI: app/main.cpp is the part of the tree a Linux build
+      # never compiles at all.
+      - name: Configure
+        env:
+          CXXFLAGS: /WX
+        run: cmake -S . -B build -A x64
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          .\build\bin\replay_cli.exe --help | Out-Null
+          .\build\bin\replay_cli.exe --interfaces
+          # The dialog is a GUI subsystem binary and cannot be run headless, so
+          # confirm it was produced rather than trying to start it.
+          if (-not (Test-Path .\build\bin\pcap_replay.exe)) {
+            throw "pcap_replay.exe was not built"
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pcap-replay-windows-x64
+          path: |
+            build/bin/pcap_replay.exe
+            build/bin/replay_cli.exe
+          if-no-files-found: error
+
+  # The version lives in app/resource.h and in CMakeLists.txt, and the two have
+  # to agree -- the header's own comment says there should be "one constant to
+  # bump, not three that can disagree about what build this is". Two files is
+  # already one more than one, so the agreement is checked rather than trusted.
+  version:
+    name: Version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare resource.h against CMakeLists.txt
+        run: |
+          header=$(sed -n 's/^#define APP_VERSION_STR *"\(.*\)".*/\1/p' app/resource.h)
+          full=$(sed -n 's/^#define APP_VERSION_FULL *"\(.*\)".*/\1/p' app/resource.h)
+          cmakever=$(sed -n 's/^ *VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt | head -1)
+          echo "resource.h APP_VERSION_STR  : $header"
+          echo "resource.h APP_VERSION_FULL : $full"
+          echo "CMakeLists project VERSION  : $cmakever"
+          # CMake carries major.minor.patch, the header's short form is
+          # major.minor, and APP_VERSION_FULL is the four-field Windows form.
+          case "$cmakever" in
+            "$header".*) ;;
+            *) echo "CMakeLists VERSION $cmakever does not match APP_VERSION_STR $header"; exit 1 ;;
+          esac
+          case "$full" in
+            "$header".*) ;;
+            *) echo "APP_VERSION_FULL $full does not match APP_VERSION_STR $header"; exit 1 ;;
+          esac
+          # On a tag, the tag has to name the same version as the source does.
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            tag="${GITHUB_REF_NAME#v}"
+            case "$tag" in
+              "$header"|"$header".*) ;;
+              *) echo "tag ${GITHUB_REF_NAME} does not match APP_VERSION_STR $header"; exit 1 ;;
+            esac
+          fi

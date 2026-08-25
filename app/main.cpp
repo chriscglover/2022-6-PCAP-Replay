@@ -217,13 +217,6 @@ void check(HWND dlg, int id, bool on) {
 }
 void enable(HWND dlg, int id, bool on) { EnableWindow(GetDlgItem(dlg, id), on); }
 
-std::string bytesText(std::uint64_t b) {
-    char buf[48];
-    if (b >= (1ull << 30)) std::snprintf(buf, sizeof buf, "%.2f GB", double(b) / (1ull << 30));
-    else                   std::snprintf(buf, sizeof buf, "%.1f MB", double(b) / (1ull << 20));
-    return buf;
-}
-
 void fillInterfaces(HWND dlg, App& app) {
     app.interfaces = enumerateInterfaces();
     for (int id : {IDC_A_IFACE, IDC_B_IFACE, IDC_NMOS_IFACE}) {

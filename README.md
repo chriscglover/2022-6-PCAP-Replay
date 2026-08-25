@@ -61,6 +61,14 @@ workload, and CMake 3.24+. Visual Studio's bundled CMake is sufficient.
 **To build on Linux** you need a C++20 compiler and `make`. Nothing else — no
 package manager, no external SDK, and CMake is optional.
 
+Both platforms are built on every push by
+[.github/workflows/build.yml](.github/workflows/build.yml), with warnings as
+errors, and the binaries are attached to the run as artifacts. That is there
+because a Linux build compiles none of the Windows `#ifdef` branches and a
+Windows build compiles none of the Linux ones, so half the tree is unchecked
+unless both are built — which is exactly how a stray brace in `mdns_win.cpp`
+once reached `main`.
+
 Two things the app does need from the *network*, rather than the machine:
 
 - **A firewall allowance** if the NMOS node API is to be reachable. It binds a
