@@ -96,6 +96,10 @@ public:
 private:
     struct Impl;
     void onInstance(MdnsService s);
+    // A service withdrawn from the link -- an mDNS goodbye, RFC 6762 10.1.
+    // Without this the published list only ever grows, and a registry that has
+    // gone stays a candidate for best() indefinitely.
+    void onInstanceGone(const std::string& instance);
     void onError(const std::string& e);
 
     mutable std::mutex       mutex_;

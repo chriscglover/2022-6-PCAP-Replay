@@ -591,7 +591,18 @@ void MdnsBrowser::Impl::handle(const std::uint8_t* p, std::size_t n) {
             if (!parser.nameAt(r.rdataAt, instance) || instance.empty()) break;
             // A goodbye. The instance is going away, so forget it rather than
             // leaving a dead registry in the list for the next 75 minutes.
-            if (r.ttl == 0) { instances.erase(instance); changed = true; break; }
+            //
+            // It has to come out of the owner's published list as well as this
+            // one: that list is what found() returns and what best() chooses
+            // from, so dropping it here alone would leave a departed registry
+            // as a candidate for ever.
+            if (r.ttl == 0) {
+                instances.erase(instance);
+                addrByHost.erase(instance);
+                owner->onInstanceGone(instance);
+                changed = true;
+                break;
+            }
             if (instances.find(instance) == instances.end()) {
                 Entry e;
                 e.svc.instance = instance;

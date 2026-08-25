@@ -116,6 +116,13 @@ void MdnsBrowser::onInstance(MdnsService s) {
     found_.push_back(std::move(s));
 }
 
+void MdnsBrowser::onInstanceGone(const std::string& instance) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    for (auto it = found_.begin(); it != found_.end(); ++it) {
+        if (it->instance == instance) { found_.erase(it); return; }
+    }
+}
+
 void MdnsBrowser::onError(const std::string& e) {
     std::lock_guard<std::mutex> lk(mutex_);
     error_ = e;
