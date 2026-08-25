@@ -42,7 +42,7 @@ jobs:
       matrix:
         builder: [make, cmake]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Compiler version
         run: g++ --version
@@ -94,7 +94,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: matrix.builder == 'make'
         with:
           name: replay_cli-linux-x86_64
@@ -105,7 +105,7 @@ jobs:
     name: Windows
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # /WX for the same reason as -Werror above. The dialog is built here too,
       # not just the CLI: app/main.cpp is the part of the tree a Linux build
@@ -129,7 +129,7 @@ jobs:
             throw "pcap_replay.exe was not built"
           }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: pcap-replay-windows-x64
           path: |
@@ -145,7 +145,7 @@ jobs:
     name: Version consistency
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Compare resource.h against CMakeLists.txt
         run: |
           header=$(sed -n 's/^#define APP_VERSION_STR *"\(.*\)".*/\1/p' app/resource.h)
