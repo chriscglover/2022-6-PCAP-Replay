@@ -55,6 +55,10 @@ jobs:
         if: matrix.builder == 'make'
         run: make -j"$(nproc)" CXXFLAGS="-O2 -g -Werror"
 
+      - name: Test (make)
+        if: matrix.builder == 'make'
+        run: make test -j"$(nproc)" CXXFLAGS="-O2 -g -Werror"
+
       # -Werror goes in via the CXXFLAGS environment variable rather than
       # -DCMAKE_CXX_FLAGS, because the command-line form *replaces* the flags
       # CMake initialises for the toolchain instead of adding to them. Harmless
@@ -67,6 +71,13 @@ jobs:
         run: |
           cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Release
           cmake --build build-cmake -j"$(nproc)"
+
+      - name: Test (ctest)
+        if: matrix.builder == 'cmake'
+        working-directory: build-cmake
+        # --output-on-failure, because a bare "1 test failed" from ctest is
+        # useless when the harness already said which case and on what line.
+        run: ctest --output-on-failure
 
       - name: Smoke test
         run: |
@@ -117,6 +128,12 @@ jobs:
 
       - name: Build
         run: cmake --build build --config Release
+
+      # The suite matters more here than on Linux, because this is the only job
+      # that compiles app/ and the Windows halves of the platform seam at all.
+      - name: Test (ctest)
+        working-directory: build
+        run: ctest -C Release --output-on-failure
 
       - name: Smoke test
         shell: pwsh

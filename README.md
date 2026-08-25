@@ -61,13 +61,52 @@ workload, and CMake 3.24+. Visual Studio's bundled CMake is sufficient.
 **To build on Linux** you need a C++20 compiler and `make`. Nothing else — no
 package manager, no external SDK, and CMake is optional.
 
-Both platforms are built on every push by
+Both platforms are built and tested on every push by
 [.github/workflows/build.yml](.github/workflows/build.yml), with warnings as
 errors, and the binaries are attached to the run as artifacts. That is there
 because a Linux build compiles none of the Windows `#ifdef` branches and a
 Windows build compiles none of the Linux ones, so half the tree is unchecked
 unless both are built — which is exactly how a stray brace in `mdns_win.cpp`
 once reached `main`.
+
+## Tests
+
+```bash
+make test                 # or: ctest --output-on-failure, from a CMake build
+./build/bin/pcapreplay_tests bitpack     # one suite, while chasing a failure
+```
+
+No framework is fetched. `tests/harness.h` is about eighty lines and does what a
+test runner has to do — register cases, run them, say which failed and where
+— which is cheaper than adding a package manager to a project whose whole
+deployment story is that it has none.
+
+What is covered, and why those things:
+
+| Suite | What it pins down |
+|---|---|
+| `bitpack` | The scalar and AVX2 packers agree byte for byte at every alignment, and the AVX2 path's overlapping stores do not run past the buffer |
+| `crc` | The fast table CRC matches the bitwise reference; the strided form matches a gathered copy; carrier words round-trip |
+| `sdi_format` | Every row of the format table is self-consistent, and no two formats share a FRAME/FRATE/SAMPLE triple — a receiver has only those to go on |
+| `sdi_raster` | A frame built with timing references, line numbers and CRCs, packed to the wire and read back by the receiver-side parser, comes out pixel-identical |
+| `hbrmt` | The nibble-packed RTP and HBRMT headers round-trip every field, and a whole 1400-byte datagram survives build and parse |
+| `pcap_reader` | Ethernet, VLAN, Q-in-Q, raw IPv4, Linux cooked, SLL2 and NULL all dissect; truncated packets are refused rather than read past |
+| `json` | Escaping, Unicode, number kinds, and the nested shape of an IS-05 PATCH body |
+| `uuid` | The RFC 4122 v5 test vector, and that resource IDs are stable across a restart but distinct per role |
+| `mdns` | The record interpretation shared by both platforms — api_ver parsing, priority, service-type splitting |
+| `mdns_wire` | The Linux multicast DNS implementation, advertising a service and browsing for it over the loopback link, including the goodbye |
+| `http` | Routing, `:id` capture, the verbs IS-05 needs, and the CORS headers without which the browser-based controllers cannot see the node |
+| `nmos_node` | The IS-04 resource chain, IS-05 staged/active/PATCH merge semantics, a rejected activation answering 500 rather than 200, and the SDP for both a single leg and a `-7` pair |
+| `common_misc` | Multicast address validation, interface ordering, the pacer's rate arithmetic, settings persistence, the status panel |
+
+Cases that need the network `SKIP` with a reason rather than failing, so a
+runner with no multicast says so instead of going red.
+
+Writing them turned up four things: a receiver-side SD parser that had never
+produced a frame, an mDNS browser that handled a goodbye internally but never
+removed the service from the list it published, a read rate that wrapped at
+every capture loop, and a `linesRecovered` comment that said `totalLines` when
+it counts active lines.
 
 Two things the app does need from the *network*, rather than the machine:
 

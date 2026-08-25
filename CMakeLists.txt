@@ -56,3 +56,7 @@ include(CTest)
 if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
     add_subdirectory(tests)
 endif()
+
+# Both platforms build the tests, and both need to: a Linux build compiles none
+# of the Windows #ifdef branches and a Windows build compiles none of the Linux
+# ones, so a suite run on one side alone leaves half the tree unexercised.

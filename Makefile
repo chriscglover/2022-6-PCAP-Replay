@@ -7,6 +7,7 @@
 #
 #   make            release build -> build/bin/replay_cli
 #   make -j         ... in parallel
+#   make test       build and run the test suite
 #   make debug      -O0 -g, with the sanitisers off
 #   make asan       address and UB sanitisers, for chasing a crash
 #   make install    to $(PREFIX)/bin, default /usr/local
@@ -56,15 +57,22 @@ NMOS_SRC := \
 
 CLI_SRC  := tools/replay_cli.cpp
 AVX2_SRC := common/src/bitpack_avx2.cpp
+TEST_SRC := $(wildcard tests/*.cpp)
 
 SRC  := $(COMMON_SRC) $(NMOS_SRC) $(CLI_SRC)
 OBJ  := $(patsubst %.cpp,$(BUILD)/obj/%.o,$(SRC))
 AOBJ := $(patsubst %.cpp,$(BUILD)/obj/%.o,$(AVX2_SRC))
 DEPS := $(OBJ:.o=.d) $(AOBJ:.o=.d)
 
-TARGET := $(BUILD)/bin/replay_cli
+# The library objects, i.e. everything but the CLI's own main().
+LIB_OBJ   := $(patsubst %.cpp,$(BUILD)/obj/%.o,$(COMMON_SRC) $(NMOS_SRC))
+TEST_OBJ  := $(patsubst %.cpp,$(BUILD)/obj/%.o,$(TEST_SRC))
+TEST_DEPS := $(TEST_OBJ:.o=.d)
 
-.PHONY: all debug asan clean install
+TARGET      := $(BUILD)/bin/replay_cli
+TEST_TARGET := $(BUILD)/bin/pcapreplay_tests
+
+.PHONY: all test debug asan clean install
 
 all: $(TARGET)
 
@@ -91,6 +99,20 @@ $(BUILD)/obj/%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXSTD) $(WARN) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
+# tests/ needs mdns_internal.h from nmos/src: the DNS-SD record interpretation
+# shared by both platforms is worth testing directly, not only through a live
+# browse that needs a network.
+$(TEST_OBJ): $(BUILD)/obj/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXSTD) $(WARN) $(CXXFLAGS) $(INCLUDES) -Itests -Inmos/src -MMD -MP -c $< -o $@
+
+$(TEST_TARGET): $(TEST_OBJ) $(LIB_OBJ) $(AOBJ)
+	@mkdir -p $(dir $@)
+	$(CXX) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+test: $(TEST_TARGET)
+	$(TEST_TARGET)
+
 install: $(TARGET)
 	install -Dm755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/replay_cli
 	@echo "installed $(DESTDIR)$(PREFIX)/bin/replay_cli"
@@ -101,4 +123,4 @@ install: $(TARGET)
 clean:
 	rm -rf $(BUILD)
 
--include $(DEPS)
+-include $(DEPS) $(TEST_DEPS)
