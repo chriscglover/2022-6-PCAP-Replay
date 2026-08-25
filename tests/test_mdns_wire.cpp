@@ -214,8 +214,21 @@ TEST(mdns_wire, two_instances_on_one_host_are_both_found) {
     CHECK(gotB);
     CHECK_EQ(fa.port, std::uint16_t(3210));
     CHECK_EQ(fb.port, std::uint16_t(3211));
-    // Distinct SRV targets, so the two do not contend for one host record.
+
+    // The SRV target differs per instance on POSIX and does not on Windows,
+    // and both are right for their platform. The POSIX responder publishes
+    // pcap-replay-<host>-<port>.local rather than <host>.local, because
+    // avahi-daemon is already authoritative for the latter and a second answer
+    // for a name someone else owns is a conflict. Windows has no such problem:
+    // DnsServiceRegister publishes through the responder that already owns the
+    // machine's name, so both instances share it and neither contends.
+#ifndef _WIN32
     CHECK_NE(fa.hostName, fb.hostName);
+#else
+    CHECK_EQ(fa.hostName, fb.hostName);
+#endif
+    CHECK(!fa.hostName.empty());
+    CHECK(!fb.hostName.empty());
 
     browser.stop();
     adA.stop();
