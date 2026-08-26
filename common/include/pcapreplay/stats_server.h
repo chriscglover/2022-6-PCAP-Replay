@@ -43,9 +43,25 @@ public:
     bool start(std::uint16_t port,
                std::function<std::string()> provider,
                const std::string& bindAddress = "127.0.0.1");
+
+    // Step to the next free port when the requested one is already listening,
+    // exactly as the NMOS node does with 3210. A second copy on one machine
+    // should still get a stats page rather than losing its only scriptable
+    // surface to the first one, and nothing depends on the number: it is
+    // printed, shown in the dialog and reported by port().
+    //
+    // Only a port collision steps. A bad bind address will not improve at the
+    // next port, so that fails once and says what was wrong.
+    bool startNear(std::uint16_t first, int span,
+                   std::function<std::string()> provider,
+                   const std::string& bindAddress = "127.0.0.1");
+
     void stop();
 
     bool running() const { return running_; }
+    // What was actually bound, which is not necessarily what was asked for --
+    // see startNear. Zero when nothing is listening.
+    std::uint16_t port() const { return port_; }
     const std::string& error() const { return error_; }
 
 private:
@@ -55,6 +71,10 @@ private:
     std::thread    thread_;
     std::function<std::string()> provider_;
     volatile bool  running_ = false;
+    std::uint16_t  port_ = 0;
+    // Whether the last failed start() failed at bind(), which is the only
+    // failure another port could cure.
+    bool           bindFailed_ = false;
     std::string    error_;
 };
 

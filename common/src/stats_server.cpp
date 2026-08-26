@@ -13,6 +13,7 @@ bool StatsServer::start(std::uint16_t port, std::function<std::string()> provide
                         const std::string& bindAddress) {
     stop();
     provider_ = std::move(provider);
+    bindFailed_ = false;
 
     socket_t s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s == kInvalidSocket) {
@@ -53,6 +54,8 @@ bool StatsServer::start(std::uint16_t port, std::function<std::string()> provide
     if (bind(s, reinterpret_cast<const sockaddr*>(&addr), sizeof addr) != 0) {
         error_ = "bind " + std::to_string(port) + ": " +
                  socketErrorText(socketError());
+        // The one failure that another port could cure. startNear reads it.
+        bindFailed_ = true;
         closeSocket(s);
         return false;
     }
@@ -71,10 +74,28 @@ bool StatsServer::start(std::uint16_t port, std::function<std::string()> provide
     setNonBlocking(s, true);
 
     sock_ = toHandle(s);
+    port_ = port;
     running_ = true;
     error_.clear();
     thread_ = std::thread([this] { serve(); });
     return true;
+}
+
+bool StatsServer::startNear(std::uint16_t first, int span,
+                            std::function<std::string()> provider,
+                            const std::string& bindAddress) {
+    for (int i = 0; i < span; ++i) {
+        const int candidate = int(first) + i;
+        if (candidate > 65535) break;
+        if (start(std::uint16_t(candidate), provider, bindAddress)) return true;
+        if (!bindFailed_) return false;     // nothing a different port can fix
+    }
+    // Say what was actually attempted. "bind 49629: address already in use" on
+    // its own reads as a typo when 49610 is what was asked for.
+    if (span > 1)
+        error_ = "no free port in " + std::to_string(first) + "-" +
+                 std::to_string(int(first) + span - 1) + " (" + error_ + ")";
+    return false;
 }
 
 void StatsServer::stop() {
@@ -87,6 +108,7 @@ void StatsServer::stop() {
         closeSocket(fromHandle(sock_));
         sock_ = kInvalid;
     }
+    port_ = 0;
 }
 
 void StatsServer::serve() {

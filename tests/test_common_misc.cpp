@@ -11,7 +11,9 @@
 
 #include "pcapreplay/net_interfaces.h"
 #include "pcapreplay/pacer.h"
+#include "pcapreplay/platform.h"
 #include "pcapreplay/settings.h"
+#include "pcapreplay/stats_server.h"
 #include "pcapreplay/status_text.h"
 
 using namespace pcapreplay;
@@ -225,4 +227,41 @@ TEST(status_text, commas_group_from_the_right) {
     CHECK_EQ(commas(999), std::string("999"));
     CHECK_EQ(commas(1000), std::string("1,000"));
     CHECK_EQ(commas(1234567890ull), std::string("1,234,567,890"));
+}
+
+// ---- the status endpoint ---------------------------------------------------
+
+TEST(stats, a_second_instance_steps_to_the_next_free_port) {
+    // The bug this covers: two copies on one machine both bound 49610, so the
+    // second lost its status endpoint entirely. The NMOS node has always
+    // stepped; the stats server now does the same.
+    SocketScope sockets;
+
+    StatsServer first;
+    if (!first.startNear(49730, 20, [] { return std::string("first\n"); }))
+        SKIP("no bindable loopback port in 49730-49749 here");
+
+    StatsServer second;
+    CHECK(second.startNear(first.port(), 20,
+                           [] { return std::string("second\n"); }));
+    CHECK(second.port() != first.port());
+    CHECK(second.port() > first.port());
+    CHECK(second.port() < 49750);
+
+    second.stop();
+    CHECK(second.port() == 0);
+    first.stop();
+}
+
+TEST(stats, a_bad_bind_address_fails_once_rather_than_walking_the_span) {
+    // Stepping is for ports that are taken. Nothing about 49751 makes an
+    // address that is not an address parse, so this must come straight back
+    // with the real complaint rather than twenty bind attempts.
+    SocketScope sockets;
+
+    StatsServer s;
+    CHECK(!s.startNear(49750, 20, [] { return std::string(); }, "not.an.address"));
+    CHECK(!s.running());
+    CHECK(s.port() == 0);
+    CHECK(s.error().find("not.an.address") != std::string::npos);
 }

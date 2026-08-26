@@ -302,7 +302,9 @@ APP_NAME " " APP_VERSION_STR " - ST 2022-6/-7 replay from packet capture, with N
 "                         replay starts immediately, as pressing Start does\n"
 "\n"
 "status\n"
-"  --stats-port N         serve the status panel over HTTP (default 49610)\n"
+"  --stats-port N         serve the status panel over HTTP (default 49610).\n"
+"                         Taken ports step up, so a second instance lands on\n"
+"                         49611; the line printed at start says which\n"
 "  --stats-bind ADDR      address to serve it on (default 127.0.0.1; use\n"
 "                         0.0.0.0 to reach it from another machine)\n"
 "  --no-stats             do not serve it at all\n"
@@ -668,7 +670,11 @@ int main(int argc, char** argv) {
     StatsServer stats;
     std::atomic<bool> nmosEnabled{wantNmos};
     if (wantStats) {
-        const bool ok = stats.start(std::uint16_t(statsPort), [&] {
+        // Step to the next free port rather than losing the status endpoint to
+        // whatever already holds this one -- the same courtesy the NMOS node
+        // does for 3210, and what makes a second instance on one machine
+        // usable. The port actually bound is printed below.
+        const bool ok = stats.startNear(std::uint16_t(statsPort), 20, [&] {
             std::string out = APP_NAME " " APP_VERSION_STR "\n\n";
             out += statusText(engine.status(), "\n");
             out += "\n-- nmos --------------------------------------------\n";
@@ -679,7 +685,8 @@ int main(int argc, char** argv) {
         if (!ok)
             std::printf("status endpoint unavailable: %s\n", stats.error().c_str());
         else if (!quiet)
-            std::printf("status: http://%s:%d/\n", statsBind.c_str(), statsPort);
+            std::printf("status: http://%s:%d/\n", statsBind.c_str(),
+                        int(stats.port()));
     }
 
     if (wantNmos) {

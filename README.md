@@ -623,6 +623,13 @@ scripting. Loopback only.
 Port 49610 is chosen because it is not normally in use, so the status endpoint
 is unlikely to collide with anything else on the machine.
 
+If it *is* taken — most often by another copy of this app — the server steps to
+the next free port rather than going without a status endpoint, exactly as the
+node API does with 3210. The GUI shows the port it landed on and `replay_cli`
+prints it (`status: http://127.0.0.1:49611/`), so nothing has to guess. The
+search covers twenty ports from wherever it started, including a port given
+explicitly with `--stats-port`.
+
 ## Supported formats
 
 1080i25/29.97/30 · 1080p25/29.97/30/50/59.94/60 · 1080PsF25 · 720p50/59.94/60 ·

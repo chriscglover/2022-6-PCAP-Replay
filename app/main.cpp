@@ -745,15 +745,11 @@ INT_PTR CALLBACK dlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
                    nmosPanel(app->nmos->status(),
                              app->nmosEnabled.load(std::memory_order_relaxed));
         };
-        std::uint16_t statsPort = app->slot.statsPort;
-        for (int i = 0; i < 20; ++i) {
-            const auto p = std::uint16_t(app->slot.statsPort + i);
-            if (app->stats.start(p, provider)) { statsPort = p; break; }
-        }
+        app->stats.startNear(app->slot.statsPort, 20, provider);
         setText(dlg, IDC_STATSURL,
                 app->stats.running()
                     ? "Live stats: http://127.0.0.1:" +
-                          std::to_string(statsPort) + "/"
+                          std::to_string(app->stats.port()) + "/"
                     : "Stats server unavailable: " + app->stats.error());
 
         SetTimer(dlg, kTimerStatus, 250, nullptr);
