@@ -294,6 +294,12 @@ APP_NAME " " APP_VERSION_STR " - ST 2022-6/-7 replay from packet capture, with N
 "  --nmos                 register as an IS-04 sender and serve IS-05, so a\n"
 "                         controller can route this like any other kit\n"
 "  --nmos-port N          node API port             (default 3210)\n"
+"  --nmos-iface IF        interface the Node API binds, publishes and\n"
+"                         advertises on, by name or address. Defaults to\n"
+"                         --iface. Set it when the video leaves by an\n"
+"                         interface a registry cannot reach -- replaying\n"
+"                         onto lo, for instance, would otherwise publish\n"
+"                         127.0.0.1 and be invisible to every controller\n"
 "  --label TEXT           sender label in the controller (default \"PCAP Replay\")\n"
 "  --registry H:P         registry override, skips mDNS discovery\n"
 "  --no-p2p               do not advertise _nmos-node._tcp for peer-to-peer\n"
@@ -322,7 +328,7 @@ int main(int argc, char** argv) {
     }
 
     std::string red, blue;
-    std::string groupA = "239.1.1.1", groupB, ifaceArg, ifaceBArg, label;
+    std::string groupA = "239.1.1.1", groupB, ifaceArg, ifaceBArg, nmosIfaceArg, label;
     int  port = 40000, ring = 16, skip = 10, nmosPort = 3210, ttl = 8;
     double seconds = 0.0, ingestSeconds = 0.0, reportInterval = 2.0;
     bool probeOnly = false, timecode = true, wantNmos = false, wantSdp = false;
@@ -357,6 +363,7 @@ int main(int argc, char** argv) {
         else if (a == "--port")        port = std::atoi(val().c_str());
         else if (a == "--iface")       ifaceArg = val();
         else if (a == "--iface-b")     ifaceBArg = val();
+        else if (a == "--nmos-iface")  nmosIfaceArg = val();
         else if (a == "--ttl")         ttl = std::atoi(val().c_str());
         else if (a == "--no-loopback") loopback = false;
         else if (a == "--seconds")     seconds = std::atof(val().c_str());
@@ -401,6 +408,20 @@ int main(int argc, char** argv) {
     std::string ifaceError;
     const std::string iface = resolveIface(ifaceArg, ifaceError);
     if (!ifaceError.empty()) { std::printf("%s\n", ifaceError.c_str()); return 2; }
+    // The Node API is control traffic and does not have to leave by the same
+    // door as the video. Replaying onto loopback is the case that forced this:
+    // the media interface is the right answer for the stream and the wrong one
+    // for the Node, which would then bind, publish and advertise 127.0.0.1 --
+    // so no registry could reach it and none could see the mDNS either. It
+    // still defaults to the media interface, which is what a single-homed
+    // machine wants and what every existing command line already assumes.
+    std::string nmosIfaceError;
+    const std::string nmosIfaceGiven = resolveIface(nmosIfaceArg, nmosIfaceError);
+    if (!nmosIfaceError.empty()) {
+        std::printf("--nmos-iface: %s\n", nmosIfaceError.c_str());
+        return 2;
+    }
+    const std::string nmosIface = nmosIfaceArg.empty() ? iface : nmosIfaceGiven;
     const std::string ifaceB =
         ifaceBArg.empty() ? iface : resolveIface(ifaceBArg, ifaceError);
     if (!ifaceError.empty()) { std::printf("%s\n", ifaceError.c_str()); return 2; }
@@ -622,6 +643,23 @@ int main(int argc, char** argv) {
                 t.interfaceNameB = ni.name;
             }
         }
+        // IS-04 requires every interface this Node lists to carry a port_id,
+        // and a port_id is a MAC. Loopback has none, so a Node whose media
+        // leaves by `lo` offered `port_id: null` and the registry refused the
+        // whole registration on schema validation -- the Node came up, served
+        // its API and was simply never in the registry. Fall back to the
+        // interface the Node API itself is on, which does have a MAC and is
+        // the interface a controller can actually reach. Reporting the Node's
+        // own interface is better than reporting one that cannot be expressed.
+        if (t.macA.empty() && !nmosIface.empty()) {
+            for (const auto& ni : enumerateInterfaces()) {
+                if (ni.ipv4 == nmosIface && !ni.mac.empty()) {
+                    t.macA = ni.mac;
+                    t.interfaceNameA = ni.name;
+                    break;
+                }
+            }
+        }
         if (t.interfaceNameA.empty()) t.interfaceNameA = "any";
         if (t.interfaceNameB.empty()) t.interfaceNameB = "any";
 
@@ -692,7 +730,7 @@ int main(int argc, char** argv) {
     if (wantNmos) {
         nmos::NmosConfig n;
         n.enabled  = true;
-        n.nodeIp   = iface;
+        n.nodeIp   = nmosIface;
         n.nodePort = std::uint16_t(nmosPort);
         n.advertisePeerToPeer = peerToPeer;
         if (!label.empty()) n.label = label;

@@ -179,6 +179,22 @@ is very often a bridge rather than the wire. `--interfaces` lists them in the
 order the GUI's dropdown uses — physical before virtual, fastest first — so
 the top entry is nearly always the right one.
 
+`--nmos-iface` sets the interface the Node API binds, publishes and advertises
+on, separately from the video. It defaults to `--iface`, which is what a
+single-homed machine wants, but the two are not always the same interface. The
+case that needs it is replaying onto loopback: the video is meant to stay on the
+machine, while the Node still has to be reachable by a registry somewhere else.
+Without it the Node publishes `127.0.0.1`, advertises on loopback, and lists an
+interface with no MAC — and since IS-04 requires a `port_id`, a registry refuses
+the registration outright. The Node comes up, serves its API, and is simply
+never in the registry.
+
+```sh
+./build/bin/replay_cli capture.pcap \
+    --group 239.100.70.1 --port 40100 --iface lo \
+    --nmos --nmos-iface ens18 --registry 10.0.0.5:3210
+```
+
 `replay_cli --help` lists everything the dialog offers: the per-path NIC and
 group, TTL, fault injection, the NMOS configuration, and the status panel.
 
