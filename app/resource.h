@@ -4,9 +4,9 @@
 // VERSIONINFO and the application reads the same strings for its title bar and
 // its stats output, so a release cannot end up labelled two different things.
 #define APP_NAME            "PCAP Replay"
-#define APP_VERSION_STR     "1.6"
-#define APP_VERSION_FULL    "1.6.0.0"
-#define APP_VERSION_COMMA   1,6,0,0
+#define APP_VERSION_STR     "1.7"
+#define APP_VERSION_FULL    "1.7.0.0"
+#define APP_VERSION_COMMA   1,7,0,0
 
 #define IDD_REPLAY          101
 #define IDI_APP             102
