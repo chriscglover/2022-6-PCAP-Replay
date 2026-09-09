@@ -5,8 +5,8 @@
 // its stats output, so a release cannot end up labelled two different things.
 #define APP_NAME            "PCAP Replay"
 #define APP_VERSION_STR     "1.8"
-#define APP_VERSION_FULL    "1.8.0.0"
-#define APP_VERSION_COMMA   1,8,0,0
+#define APP_VERSION_FULL    "1.8.1.0"
+#define APP_VERSION_COMMA   1,8,1,0
 
 #define IDD_REPLAY          101
 #define IDI_APP             102
