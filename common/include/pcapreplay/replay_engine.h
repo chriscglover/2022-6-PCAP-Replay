@@ -8,9 +8,15 @@
 // packets verbatim -- a verbatim replay has to jump all four of those backwards
 // at every loop, which a receiver reads as a fault.
 //
-// The raster is copied through untouched apart from the timecode rewrite, so the
-// replay still carries everything the broadcast did: ATC timecode, OP-47
-// subtitles, SCTE 104, AFD, ST 2020 metadata and 16 channels of ST 299 audio.
+// The raster is copied through untouched apart from the ATC timecode, so the
+// replay still carries everything else the broadcast did: OP-47 subtitles,
+// SCTE 104, AFD, ST 2020 metadata and 16 channels of ST 299 audio.
+//
+// ATC timecode is rewritten rather than carried: a looping capture would jump
+// its timecode backwards at every loop. Every ATC packet in the frame is
+// overwritten from this machine's system clock in local time -- time-of-day
+// packets directly, countdown-to-midnight ones regenerated from the same clock,
+// the two told apart by which way the value moves. --no-timecode leaves them.
 //
 // Same split as the original: the GUI owns configuration and display, this owns
 // everything real, and it runs on its own thread.

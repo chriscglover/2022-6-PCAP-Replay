@@ -356,9 +356,20 @@ four of those as a fault. This app decodes the capture back to the SDI raster
 and generates the headers itself, so the loop join is invisible and the stream
 runs indefinitely.
 
-The raster is copied through untouched apart from the timecode rewrite, so the
-replay still carries everything the original broadcast did — ATC timecode, OP-47
-subtitles, SCTE 104, AFD, ST 2020 metadata and 16 channels of ST 299 audio.
+The raster is copied through untouched apart from the ATC timecode, so the replay
+still carries everything else the original broadcast did — OP-47 subtitles,
+SCTE 104, AFD, ST 2020 metadata and 16 channels of ST 299 audio.
+
+ATC timecode is the exception: it is **rewritten, not carried through**. A capture
+that loops would otherwise jump its timecode backwards every time it reached the
+end, which is the same class of fault as jumping the RTP sequence back. So every
+ATC packet in the frame is overwritten from **this machine's system clock**, in
+local time — the time-of-day packets directly, and any that count down to midnight
+regenerated from the same clock. The two are told apart by which way a site's
+value moves as the capture plays: one that falls rather than rises is a countdown.
+
+`--no-timecode` turns the rewrite off and leaves the captured timecode exactly as
+it was, at the cost of it stepping backwards at each loop.
 
 ## How the streaming source works
 
