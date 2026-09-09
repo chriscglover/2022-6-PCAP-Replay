@@ -1,6 +1,7 @@
 #include "pcapreplay/status_text.h"
 
 #include <cstdio>
+#include <string>
 
 namespace pcapreplay {
 
@@ -17,6 +18,30 @@ std::string statusText(const ReplayStatus& s, const char* eol) {
     }
 
     const PcapSourceStatus& src = s.source;
+
+    // A held leg makes "datagrams built" lead what that leg has actually sent,
+    // permanently and by design. Say so here, or the first person to compare
+    // the two reads the difference as loss.
+    std::string skewText = "off";
+    std::string holdText = "-";
+    if (s.skewEnabled) {
+        char sk[256];
+        const char* lead = s.skewMs > 0.0   ? "path B behind"
+                         : s.skewMs < 0.0   ? "path A behind"
+                                            : "legs level";
+        if (s.skewLoMs != s.skewHiMs)
+            std::snprintf(sk, sizeof sk, "%+.2f ms  %s   (window %+.1f to %+.1f, target %+.2f)",
+                          s.skewMs, lead, s.skewLoMs, s.skewHiMs, s.skewTargetMs);
+        else
+            std::snprintf(sk, sizeof sk, "%+.2f ms  %s   (fixed)", s.skewMs, lead);
+        skewText = sk;
+        std::snprintf(sk, sizeof sk, "%d / %d batches%s%s",
+                      s.skewRingFill, s.skewRingSlots,
+                      s.skewOverruns ? "   ring overruns: " : "",
+                      s.skewOverruns ? commas(s.skewOverruns).c_str() : "");
+        holdText = sk;
+    }
+
     char buf[4096];
     std::snprintf(buf, sizeof buf,
         "Format                 : %s%s"
@@ -51,7 +76,11 @@ std::string statusText(const ReplayStatus& s, const char* eol) {
         "Dropped A / B          : %s / %s%s"
         "Reordered              : %s%s"
         "Duplicated             : %s%s"
-        "Sequence jumps         : %s%s",
+        "Sequence jumps         : %s%s"
+        "%s"
+        "-- path skew ---------------------------------------%s"
+        "Differential           : %s%s"
+        "Holding                : %s%s",
         s.formatText.c_str(), eol,
         s.destinationA.c_str(), eol,
         s.destinationB.empty() ? "-  (single leg, ST 2022-6)" : s.destinationB.c_str(), eol,
@@ -89,7 +118,11 @@ std::string statusText(const ReplayStatus& s, const char* eol) {
         commas(s.droppedA).c_str(), commas(s.droppedB).c_str(), eol,
         commas(s.reordered).c_str(), eol,
         commas(s.duplicated).c_str(), eol,
-        commas(s.seqJumps).c_str(), eol);
+        commas(s.seqJumps).c_str(), eol,
+        eol,
+        eol,
+        skewText.c_str(), eol,
+        holdText.c_str(), eol);
 
     std::string out = buf;
     if (!s.warning.empty()) out += std::string(eol) + "!! " + s.warning + eol;

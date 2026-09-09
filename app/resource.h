@@ -4,9 +4,9 @@
 // VERSIONINFO and the application reads the same strings for its title bar and
 // its stats output, so a release cannot end up labelled two different things.
 #define APP_NAME            "PCAP Replay"
-#define APP_VERSION_STR     "1.7"
-#define APP_VERSION_FULL    "1.7.0.0"
-#define APP_VERSION_COMMA   1,7,0,0
+#define APP_VERSION_STR     "1.8"
+#define APP_VERSION_FULL    "1.8.0.0"
+#define APP_VERSION_COMMA   1,8,0,0
 
 #define IDD_REPLAY          101
 #define IDI_APP             102
@@ -42,6 +42,15 @@
 #define IDC_F_DUP           1034
 #define IDC_F_SEQJUMP       1035
 #define IDC_F_RATE          1036
+
+// ---- path skew ------------------------------------------------------------
+#define IDC_SK_OFF          1070
+#define IDC_SK_FIXED        1071
+#define IDC_SK_WINDOW       1072
+#define IDC_SK_MS           1073
+#define IDC_SK_LO           1074
+#define IDC_SK_HI           1075
+#define IDC_SK_SLEW         1076
 
 // ---- NMOS -----------------------------------------------------------------
 #define IDC_NMOS_EN         1040

@@ -290,6 +290,20 @@ APP_NAME " " APP_VERSION_STR " - ST 2022-6/-7 replay from packet capture, with N
 "  --fault-rate P         probability per datagram per enabled fault, percent\n"
 "                         (default 0.10)\n"
 "\n"
+"path skew -- ST 2022-7 differential delay, the one impairment a same-host\n"
+"replay cannot produce by accident. Positive delays path B, negative delays\n"
+"path A; a receiver only sees the difference. Needs both legs.\n"
+"  --skew MS              hold one leg this far behind the other, fixed\n"
+"  --skew-window LO HI    wander randomly between LO and HI instead. Straddle\n"
+"                         zero (e.g. -10 10) to swap which leg leads as it runs\n"
+"  --skew-slew MS_PER_S   how fast skew may change     (default 1)\n"
+"                         It never steps: a step would gap the lagging leg or\n"
+"                         release a microburst, and the receiver would be\n"
+"                         measuring that rather than the skew. At 1 ms/s the\n"
+"                         lagging leg runs 0.1%% slow, which is what a slowly\n"
+"                         lengthening path actually does\n"
+"  --skew-dwell S         longest random hold at a target (default 2)\n"
+"\n"
 "NMOS\n"
 "  --nmos                 register as an IS-04 sender and serve IS-05, so a\n"
 "                         controller can route this like any other kit\n"
@@ -340,6 +354,7 @@ int main(int argc, char** argv) {
     double discoverSeconds = 5.0;
     std::string registry;
     ReplayFaults faults;
+    SkewSettings skew;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -377,6 +392,14 @@ int main(int argc, char** argv) {
         else if (a == "--fault-duplicate") faults.duplicate = true;
         else if (a == "--fault-seqjump")   faults.seqJump = true;
         else if (a == "--fault-rate")      faults.ratePercent = std::atof(val().c_str());
+        else if (a == "--skew")            skew.fixedMs = std::atof(val().c_str());
+        else if (a == "--skew-window") {
+            skew.window = true;
+            skew.windowLoMs = std::atof(val().c_str());
+            skew.windowHiMs = std::atof(val().c_str());
+        }
+        else if (a == "--skew-slew")       skew.slewMsPerSec = std::atof(val().c_str());
+        else if (a == "--skew-dwell")      skew.dwellMaxSec = std::atof(val().c_str());
         else if (a == "--nmos")        wantNmos = true;
         else if (a == "--nmos-port")   nmosPort = std::atoi(val().c_str());
         else if (a == "--label")       label = val();
@@ -581,6 +604,7 @@ int main(int argc, char** argv) {
     cfg.rewriteTimecode = timecode;
     cfg.maxSeconds = seconds;
     cfg.faults = faults;
+    cfg.skew   = skew;
 
     // Say no to a configuration that cannot work, here, rather than letting it
     // fail as an empty link somebody then goes looking for with a capture.

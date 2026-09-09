@@ -13,6 +13,11 @@ Built on an earlier ST 2022-6 replay engine, with two changes:
    it as fits in RAM.
 2. **NMOS**: the app registers as an IS-04 sender, serves IS-05 so a controller
    can activate it and change its destination, and publishes an SDP manifest.
+3. **Differential path delay**: either leg can be held behind the other, fixed
+   or wandering randomly within a window. That is the one ST 2022-7 impairment a
+   same-host replay cannot produce by accident -- both legs otherwise leave in
+   the same pacer slot -- and it is what exercises a receiver's differential
+   delay window rather than only its packet recovery.
 
 Everything the original replay did still works: indefinite looping with fresh
 RTP and HBRMT headers so the loop join is invisible, live timecode rewriting,

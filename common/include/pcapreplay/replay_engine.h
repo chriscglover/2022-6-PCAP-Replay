@@ -25,6 +25,7 @@
 #include "pcapreplay/net_multicast.h"
 #include "pcapreplay/pcap_source.h"
 #include "pcapreplay/sdi_format.h"
+#include "pcapreplay/skew.h"
 
 namespace pcapreplay {
 
@@ -72,6 +73,10 @@ struct ReplayConfig {
     double       maxSeconds = 0.0;
 
     ReplayFaults faults;
+
+    // ST 2022-7 differential path delay. Disabled by default, in which case
+    // both legs leave in the same pacer slot exactly as they always have.
+    SkewSettings skew;
 };
 
 struct ReplayStatus {
@@ -97,6 +102,18 @@ struct ReplayStatus {
 
     std::uint64_t droppedA = 0, droppedB = 0;
     std::uint64_t reordered = 0, duplicated = 0, seqJumps = 0;
+
+    // Differential path delay. `skewMs` is what is on the wire right now and
+    // `skewTargetMs` is where it is heading; they differ only while slewing.
+    // Ring fill is reported because a held leg makes "datagrams built" lead
+    // "datagrams sent on that leg" permanently, which otherwise reads as loss.
+    bool          skewEnabled = false;
+    double        skewMs = 0.0;
+    double        skewTargetMs = 0.0;
+    double        skewLoMs = 0.0, skewHiMs = 0.0;
+    int           skewRingSlots = 0;     // capacity, batches
+    int           skewRingFill = 0;      // batches built but not yet sent by both legs
+    std::uint64_t skewOverruns = 0;      // batches force-released to avoid overwrite
 
     // Timecode being written into the stream right now.
     std::string   tod, countdown;

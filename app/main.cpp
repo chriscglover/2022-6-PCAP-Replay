@@ -435,6 +435,16 @@ void updateModeUi(HWND dlg, bool running) {
     for (int id : {IDC_B_GROUP, IDC_B_PORT, IDC_B_IFACE})
         enable(dlg, id, seven && !running);
     enable(dlg, IDC_F_LOSS_B, seven);
+
+    // Differential delay needs two legs to be a difference between.
+    for (int id : {IDC_SK_OFF, IDC_SK_FIXED, IDC_SK_WINDOW})
+        enable(dlg, id, seven);
+    const bool fixed  = seven && checked(dlg, IDC_SK_FIXED);
+    const bool window = seven && checked(dlg, IDC_SK_WINDOW);
+    enable(dlg, IDC_SK_MS, fixed);
+    enable(dlg, IDC_SK_LO, window);
+    enable(dlg, IDC_SK_HI, window);
+    enable(dlg, IDC_SK_SLEW, fixed || window);
 }
 
 void updateNmosUi(HWND dlg) {
@@ -507,6 +517,22 @@ ReplayFaults faultsFrom(HWND dlg) {
     return f;
 }
 
+SkewSettings skewFrom(HWND dlg) {
+    SkewSettings s;
+    if (checked(dlg, IDC_SK_FIXED)) {
+        s.fixedMs = std::atof(getText(dlg, IDC_SK_MS).c_str());
+    } else if (checked(dlg, IDC_SK_WINDOW)) {
+        s.window = true;
+        s.windowLoMs = std::atof(getText(dlg, IDC_SK_LO).c_str());
+        s.windowHiMs = std::atof(getText(dlg, IDC_SK_HI).c_str());
+        // A window of zero width is a fixed skew; keeping it as a window would
+        // just wander nowhere, so let it through rather than rejecting it.
+    }
+    s.slewMsPerSec = std::atof(getText(dlg, IDC_SK_SLEW).c_str());
+    if (s.slewMsPerSec <= 0.0) s.slewMsPerSec = 1.0;
+    return s;
+}
+
 ReplayConfig configFrom(HWND dlg, App& app) {
     ReplayConfig cfg;
     cfg.fileRed  = getText(dlg, IDC_RED);
@@ -528,6 +554,7 @@ ReplayConfig configFrom(HWND dlg, App& app) {
     cfg.rewriteTimecode = checked(dlg, IDC_TIMECODE);
     cfg.maxSeconds = double(GetDlgItemInt(dlg, IDC_DURATION, nullptr, FALSE));
     cfg.faults = faultsFrom(dlg);
+    cfg.skew   = skewFrom(dlg);
     return cfg;
 }
 
@@ -708,6 +735,11 @@ INT_PTR CALLBACK dlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         check(dlg, IDC_TIMECODE, st.getBool("timecode", true));
         SetDlgItemInt(dlg, IDC_DURATION, UINT(st.getInt("duration", 0)), FALSE);
         setText(dlg, IDC_F_RATE, "0.1");
+        check(dlg, IDC_SK_OFF, true);
+        setText(dlg, IDC_SK_MS,   "10");
+        setText(dlg, IDC_SK_LO,   "-10");
+        setText(dlg, IDC_SK_HI,   "10");
+        setText(dlg, IDC_SK_SLEW, "1");
 
         check(dlg, IDC_NMOS_EN, st.getBool("nmos", false));
         setText(dlg, IDC_NMOS_LABEL, st.getString("nmos_label", "PCAP Replay"));
@@ -790,6 +822,9 @@ INT_PTR CALLBACK dlgProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         // Impairments can be toggled while running; the engine re-reads them
         // only on start, so flipping one restarts it with the new set. That is
         // cheap because the capture is streamed, not reloaded.
+        case IDC_SK_OFF: case IDC_SK_FIXED: case IDC_SK_WINDOW:
+            updateModeUi(dlg, app->engine.running());
+            [[fallthrough]];
         case IDC_F_LOSS_A: case IDC_F_LOSS_B: case IDC_F_BURST:
         case IDC_F_REORDER: case IDC_F_DUP: case IDC_F_SEQJUMP:
             if (app->engine.running()) {

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -234,19 +235,6 @@ private:
 
 // xorshift64*: fast, good enough to decorrelate fault decisions, and seeded per
 // run so two runs do not impair identically.
-struct Rng {
-    std::uint64_t s;
-    explicit Rng(std::uint64_t seed) : s(seed ? seed : 0x9E3779B97F4A7C15ull) {}
-    std::uint64_t next() {
-        s ^= s >> 12; s ^= s << 25; s ^= s >> 27;
-        return s * 0x2545F4914F6CDD1Dull;
-    }
-    bool chance(double p) {
-        return p > 0.0 && double(next() >> 11) / 9007199254740992.0 < p;
-    }
-    std::uint32_t below(std::uint32_t n) { return n ? std::uint32_t(next() % n) : 0; }
-};
-
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -289,6 +277,15 @@ void ReplayEngine::run(ReplayConfig cfg) {
         status_.error = msg;
         running_.store(false, std::memory_order_relaxed);
     };
+
+    // Refuse a skew the transmitter cannot honour rather than clamping it: a
+    // silently reduced differential would be reported as the requested one, and
+    // the whole point of the feature is to state the delay exactly.
+    if (const char* bad = cfg.skew.validate()) { fail(bad); return; }
+    if (cfg.skew.enabled() && !cfg.enablePathB) {
+        fail("path skew needs both ST 2022-7 legs; give --group-b");
+        return;
+    }
 
     // ---- source -------------------------------------------------------------
     PcapSource src;
@@ -380,7 +377,41 @@ void ReplayEngine::run(ReplayConfig cfg) {
     pacer.start(pps);
 
     const int burstMax = MulticastSender::maxSegments(int(kDatagramBytes));
-    std::vector<std::uint8_t> burst(std::size_t(burstMax) * kDatagramBytes);
+
+    // Transmit ring. One copy of each built batch, released to A and to B
+    // through independent cursors, so either leg can be held behind the other.
+    // Batches are built straight into their slot and both legs send from it, so
+    // skew costs no extra copy -- and because whole batches are released, the
+    // segmentation offload still does the work. Releasing per datagram instead
+    // would need 539,700 syscalls/s at 1080p50 against a measured ceiling near
+    // 177,000.
+    //
+    // Depth covers the deepest hold plus a margin. The margin is not for
+    // rounding: the pacer issues its accumulated backlog in a burst once the
+    // source finishes pre-rolling, so the first moments after start build
+    // batches faster than line rate while the held leg is already at full
+    // depth. A thin margin overruns exactly once, at startup, and a forced
+    // release then quietly sends early -- which is the one thing this must not
+    // do, because it would report a skew it is not applying. 128 batches is
+    // ~8 MB and covers any plausible burst.
+    //
+    // With skew off this is a single slot and the loop behaves exactly as it
+    // did before.
+    const double batchSeconds = double(burstMax) / pps;
+    const int skewSlots =
+        cfg.skew.enabled()
+            ? int(std::ceil(cfg.skew.maxAbsMs() / 1000.0 / batchSeconds)) + 128
+            : 1;
+    std::vector<std::uint8_t> ring(std::size_t(skewSlots) * burstMax * kDatagramBytes);
+    std::vector<int>          ringCount(std::size_t(skewSlots), 0);
+    std::vector<double>       ringTime(std::size_t(skewSlots), 0.0);
+    std::uint64_t wslot = 0, aslot = 0, bslot = 0;
+    std::uint64_t skewOverruns = 0;
+    SkewController skew;
+    skew.start(cfg.skew, std::uint64_t(std::chrono::steady_clock::now()
+                                           .time_since_epoch().count()) ^ 0x5DEECE66Dull,
+               0.0);
+
     std::vector<int> order;
     order.reserve(std::size_t(burstMax) * 2);
 
@@ -417,8 +448,8 @@ void ReplayEngine::run(ReplayConfig cfg) {
     // Emit one burst down one path, applying that path's impairments. Runs of
     // consecutive datagrams go out in a single syscall so the segmentation
     // offload still does the work; only the faults themselves cost extra calls.
-    auto emit = [&](MulticastSender& tx, bool wantLoss, int& burstLeft,
-                    std::uint64_t& dropped, int built) {
+    auto emit = [&](MulticastSender& tx, const std::uint8_t* base, bool wantLoss,
+                    int& burstLeft, std::uint64_t& dropped, int built) {
         order.clear();
         for (int k = 0; k < built; ++k) {
             if (burstLeft > 0) { --burstLeft; ++dropped; continue; }
@@ -440,7 +471,7 @@ void ReplayEngine::run(ReplayConfig cfg) {
         while (i < order.size()) {
             std::size_t j = i + 1;
             while (j < order.size() && order[j] == order[j - 1] + 1) ++j;
-            tx.sendMany(burst.data() + std::size_t(order[i]) * kDatagramBytes,
+            tx.sendMany(base + std::size_t(order[i]) * kDatagramBytes,
                         int(kDatagramBytes), int(j - i));
             i = j;
         }
@@ -457,6 +488,29 @@ void ReplayEngine::run(ReplayConfig cfg) {
             credit += got;
         }
         if (credit <= 0) continue;
+
+        // Never overwrite a slot a leg has not sent yet. Sizing makes this
+        // unreachable, but a forced release is the only safe response if it
+        // ever is reached: sending late beats transmitting a half-overwritten
+        // batch, and the counter says it happened.
+        const std::uint64_t oldest = std::min(aslot, bslot);
+        if (wslot - oldest >= std::uint64_t(skewSlots)) {
+            const std::size_t i = std::size_t(oldest % std::uint64_t(skewSlots));
+            std::uint8_t* base = ring.data() + i * std::size_t(burstMax) * kDatagramBytes;
+            if (aslot == oldest) {
+                emit(txA, base, cfg.faults.lossA, burstDropA, droppedA, ringCount[i]);
+                ++aslot;
+            }
+            if (haveB && bslot == oldest) {
+                emit(txB, base, cfg.faults.lossB, burstDropB, droppedB, ringCount[i]);
+                ++bslot;
+            }
+            if (!haveB) bslot = aslot;
+            ++skewOverruns;
+        }
+
+        const std::size_t wi = std::size_t(wslot % std::uint64_t(skewSlots));
+        std::uint8_t* slot = ring.data() + wi * std::size_t(burstMax) * kDatagramBytes;
 
         int built = 0;
         for (; built < credit; ++built) {
@@ -505,22 +559,44 @@ void ReplayEngine::run(ReplayConfig cfg) {
                 std::memset(chunk + take, 0, kHbrmtPayloadBytes - take);
 
             buildDatagram(rtp, hb, {chunk, kHbrmtPayloadBytes},
-                          burst.data() + std::size_t(built) * kDatagramBytes,
+                          slot + std::size_t(built) * kDatagramBytes,
                           kDatagramBytes);
             ++streamPos;
         }
         if (!built) continue;
 
-        if (!cfg.faults.any()) {
-            txA.sendMany(burst.data(), int(kDatagramBytes), built);
-            if (haveB) txB.sendMany(burst.data(), int(kDatagramBytes), built);
-        } else {
-            emit(txA, cfg.faults.lossA, burstDropA, droppedA, built);
-            if (haveB) emit(txB, cfg.faults.lossB, burstDropB, droppedB, built);
-        }
+        const PacerStats ps = pacer.stats();
+        const double nowSec = ps.elapsedSeconds;
+        ringCount[wi] = built;
+        ringTime[wi]  = nowSec;
+        ++wslot;
         sent += std::uint64_t(built);
 
-        const PacerStats ps = pacer.stats();
+        skew.advance(nowSec);
+        const double delayA = skew.delayASec();
+        const double delayB = skew.delayBSec();
+
+        // Release everything now due on each leg. With no skew both cursors
+        // take the slot just built, in this iteration, which is the original
+        // behaviour down to the syscalls.
+        auto release = [&](MulticastSender& tx, std::uint64_t& cur, double delay,
+                           bool wantLoss, int& burstLeft, std::uint64_t& dropped) {
+            while (cur < wslot) {
+                const std::size_t i = std::size_t(cur % std::uint64_t(skewSlots));
+                if (nowSec < ringTime[i] + delay) break;
+                const std::uint8_t* base =
+                    ring.data() + i * std::size_t(burstMax) * kDatagramBytes;
+                if (!cfg.faults.any())
+                    tx.sendMany(base, int(kDatagramBytes), ringCount[i]);
+                else
+                    emit(tx, base, wantLoss, burstLeft, dropped, ringCount[i]);
+                ++cur;
+            }
+        };
+        release(txA, aslot, delayA, cfg.faults.lossA, burstDropA, droppedA);
+        if (haveB) release(txB, bslot, delayB, cfg.faults.lossB, burstDropB, droppedB);
+        else       bslot = aslot;
+
         if (cfg.maxSeconds > 0.0 && ps.elapsedSeconds >= cfg.maxSeconds) {
             completed = true;
             break;
@@ -540,6 +616,14 @@ void ReplayEngine::run(ReplayConfig cfg) {
             status_.duplicated  = duplicated;
             status_.seqJumps    = jumps;
             status_.repeatedFrames = repeats;
+            status_.skewEnabled  = cfg.skew.enabled();
+            status_.skewMs       = skew.currentMs();
+            status_.skewTargetMs = skew.targetMs();
+            status_.skewLoMs     = cfg.skew.loMs();
+            status_.skewHiMs     = cfg.skew.hiMs();
+            status_.skewRingSlots = skewSlots;
+            status_.skewRingFill  = int(wslot - std::min(aslot, bslot));
+            status_.skewOverruns  = skewOverruns;
             status_.tod         = todText;
             status_.countdown   = cdText;
             status_.source      = ss;
