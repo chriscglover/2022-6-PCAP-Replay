@@ -436,15 +436,15 @@ void updateModeUi(HWND dlg, bool running) {
         enable(dlg, id, seven && !running);
     enable(dlg, IDC_F_LOSS_B, seven);
 
-    // Differential delay needs two legs to be a difference between.
-    for (int id : {IDC_SK_OFF, IDC_SK_FIXED, IDC_SK_WINDOW})
+    // Differential delay needs two legs to be a difference between, so the
+    // whole group follows -7 mode. The value fields are NOT greyed by which
+    // mode is selected: the Rate % box beside the impairments is live whether
+    // or not a fault is ticked, and a group whose fields are all grey on first
+    // open -- Off being the default -- reads as broken rather than as waiting
+    // for a choice. The radios say which values are in force.
+    for (int id : {IDC_SK_OFF, IDC_SK_FIXED, IDC_SK_WINDOW,
+                   IDC_SK_MS, IDC_SK_LO, IDC_SK_HI, IDC_SK_SLEW})
         enable(dlg, id, seven);
-    const bool fixed  = seven && checked(dlg, IDC_SK_FIXED);
-    const bool window = seven && checked(dlg, IDC_SK_WINDOW);
-    enable(dlg, IDC_SK_MS, fixed);
-    enable(dlg, IDC_SK_LO, window);
-    enable(dlg, IDC_SK_HI, window);
-    enable(dlg, IDC_SK_SLEW, fixed || window);
 }
 
 void updateNmosUi(HWND dlg) {

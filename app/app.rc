@@ -75,36 +75,39 @@ BEGIN
     LTEXT           "Rate %", -1, 134, 268, 26, 8
     EDITTEXT        IDC_F_RATE, 162, 266, 30, 12, ES_AUTOHSCROLL
 
-    // ---- Run -------------------------------------------------------------
-    DEFPUSHBUTTON   "Start", IDC_START, 7, 306, 80, 20
-    LTEXT           "Idle", IDC_SUMMARY, 95, 312, 208, 10
-    LTEXT           "", IDC_STATSURL, 7, 332, 296, 10
-
     // ---- Path skew -------------------------------------------------------
     // ST 2022-7 differential delay. Positive holds B, negative holds A, and a
     // window straddling zero swaps which leg leads as it runs.
-    GROUPBOX        "Path skew  -  ST 2022-7 differential delay", -1, 7, 348, 296, 74
+    GROUPBOX        "Path skew  -  ST 2022-7 differential delay", -1, 7, 302, 296, 74
 
     CONTROL         "Off", IDC_SK_OFF, "Button",
-                    BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 14, 362, 32, 10
+                    BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 14, 316, 32, 10
     CONTROL         "Fixed", IDC_SK_FIXED, "Button",
-                    BS_AUTORADIOBUTTON, 50, 362, 40, 10
+                    BS_AUTORADIOBUTTON, 50, 316, 40, 10
     CONTROL         "Window", IDC_SK_WINDOW, "Button",
-                    BS_AUTORADIOBUTTON, 94, 362, 48, 10
+                    BS_AUTORADIOBUTTON, 94, 316, 48, 10
 
-    LTEXT           "Fixed", -1, 14, 380, 24, 8
-    EDITTEXT        IDC_SK_MS, 40, 378, 32, 12, ES_AUTOHSCROLL
-    LTEXT           "ms    ( + holds B,  - holds A )", -1, 76, 380, 120, 8
+    // WS_GROUP closes the radio group: without it the group runs on through
+    // every following control until the next one that has it, which is over in
+    // the NMOS box, and arrow-key navigation walks out of the skew panel.
+    LTEXT           "Fixed", -1, 14, 334, 24, 8, WS_GROUP
+    EDITTEXT        IDC_SK_MS, 40, 332, 32, 12, ES_AUTOHSCROLL
+    LTEXT           "ms    ( + holds B,  - holds A )", -1, 76, 334, 120, 8
 
-    LTEXT           "Window", -1, 14, 396, 32, 8
-    EDITTEXT        IDC_SK_LO, 48, 394, 28, 12, ES_AUTOHSCROLL
-    LTEXT           "to", -1, 80, 396, 10, 8
-    EDITTEXT        IDC_SK_HI, 92, 394, 28, 12, ES_AUTOHSCROLL
-    LTEXT           "ms", -1, 124, 396, 12, 8
+    LTEXT           "Window", -1, 14, 350, 32, 8
+    EDITTEXT        IDC_SK_LO, 48, 348, 28, 12, ES_AUTOHSCROLL
+    LTEXT           "to", -1, 80, 350, 10, 8
+    EDITTEXT        IDC_SK_HI, 92, 348, 28, 12, ES_AUTOHSCROLL
+    LTEXT           "ms", -1, 124, 350, 12, 8
 
-    LTEXT           "Slew", -1, 150, 396, 20, 8
-    EDITTEXT        IDC_SK_SLEW, 174, 394, 28, 12, ES_AUTOHSCROLL
-    LTEXT           "ms/s", -1, 206, 396, 22, 8
+    LTEXT           "Slew", -1, 150, 350, 20, 8
+    EDITTEXT        IDC_SK_SLEW, 174, 348, 28, 12, ES_AUTOHSCROLL
+    LTEXT           "ms/s", -1, 206, 350, 22, 8
+
+    // ---- Run -------------------------------------------------------------
+    DEFPUSHBUTTON   "Start", IDC_START, 7, 382, 80, 20
+    LTEXT           "Idle", IDC_SUMMARY, 95, 388, 208, 10
+    LTEXT           "", IDC_STATSURL, 7, 408, 296, 10
 
     // ---- NMOS ------------------------------------------------------------
     GROUPBOX        "NMOS", -1, 310, 4, 303, 190
