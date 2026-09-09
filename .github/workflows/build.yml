@@ -189,3 +189,42 @@ jobs:
               *) echo "tag ${GITHUB_REF_NAME} does not match APP_VERSION_STR $header"; exit 1 ;;
             esac
           fi
+
+  # Attach the binaries to the release, so a tag produces something a user can
+  # download without knowing what a workflow artifact is. Artifacts alone are
+  # not enough: they expire, they need a GitHub login to fetch, and they are not
+  # reachable from the release page at all.
+  #
+  # Runs only on a tag, and only once every build and the version check have
+  # passed -- a release with binaries that failed their tests is worse than a
+  # release with none.
+  release:
+    name: Attach binaries to the release
+    if: github.ref_type == 'tag'
+    needs: [linux, windows, version]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+
+      - name: Package
+        run: |
+          set -eu
+          ver="${GITHUB_REF_NAME#v}"
+          mkdir -p out
+          # Windows ships as one zip: the dialog and the CLI are the same
+          # product and a user who wants one usually wants the other.
+          (cd artifacts/pcap-replay-windows-x64 && zip -j "../../out/pcap-replay-$ver-windows-x64.zip" pcap_replay.exe replay_cli.exe)
+          # Linux is a single static-ish binary, so it goes as-is rather than in
+          # an archive that only adds a step.
+          cp artifacts/replay_cli-linux-x86_64/replay_cli "out/replay_cli-$ver-linux-x86_64"
+          chmod +x "out/replay_cli-$ver-linux-x86_64"
+          ls -l out
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" out/* --clobber --repo "${GITHUB_REPOSITORY}"

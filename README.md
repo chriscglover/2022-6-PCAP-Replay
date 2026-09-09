@@ -142,6 +142,7 @@ routed by a controller to a hardware ST 2022-6 receiver, and decoded.
 | Linux build and replay | ✅ Proven — 1080i25 at 100.0% of target packet rate, registered with a live registry, taken by a controller onto a hardware receiver bank and decoded |
 | pcap ingest, format detection, marker-bit frame cutting, raster validation | ✅ Proven on 1080i25 and 625i25 captures |
 | ST 2022-7 two-leg merge | ✅ Proven — recovers datagrams missing from one leg |
+| ST 2022-7 differential path delay | ✅ Proven on the wire against a live receiver — `--skew 20` measured 20.13 ms, `--skew -15` measured −15.05 ms, a 5–25 ms window wandered 5.37→17.93 ms |
 | Streaming ring buffer at line rate | ✅ Proven — 129 fps merged against 25 fps needed |
 | Loop, fresh RTP/HBRMT, timecode rewrite, fault injection | ✅ Carried over from the earlier replay engine, unchanged |
 | IS-04 registration, heartbeat, Node API | ✅ Proven against a live registry |
@@ -617,7 +618,101 @@ measurement. On Linux it is the whole product; `--help` lists every option.
 .\build\bin\replay_cli.exe red.pcap blue.pcap `
     --group 239.0.0.1 --group-b 239.0.0.2 --iface 192.168.0.1 `
     --seconds 60 --nmos --registry 10.0.0.5:3210
+
+# hold path B 20 ms behind path A, and lose 1% of path A
+.\build\bin\replay_cli.exe red.pcap blue.pcap `
+    --group 239.0.0.1 --group-b 239.0.0.2 `
+    --skew 20 --fault-loss-a --fault-rate 1
 ```
+
+## Exercising a receiver
+
+Two independent things can be done to the stream: **impairments**, which damage
+it, and **path skew**, which delays one leg against the other. All of them are
+random rather than periodic, because a fixed 1-in-N pattern can line up with a
+receiver's own buffering and either flatter it or punish it unfairly.
+
+### Impairments
+
+| Option | What it does |
+|---|---|
+| `--fault-loss-a` | drop individual datagrams on path A |
+| `--fault-loss-b` | ... and on path B, independently |
+| `--fault-burst` | drop a short run — 4 to 43 datagrams — as a real glitch does |
+| `--fault-reorder` | swap adjacent datagrams |
+| `--fault-duplicate` | send a datagram twice |
+| `--fault-seqjump` | sequence discontinuity, as after a sender restart |
+| `--fault-rate P` | probability per datagram per enabled fault, percent (default 0.10) |
+
+Only `--fault-loss-a` and `--fault-loss-b` are per-path. Burst, reorder and
+duplicate are applied to **both legs independently**, so `--fault-loss-a
+--fault-burst` is not "bursts on A" — it is bursts on both, and a -7 receiver
+will lose whatever the two happen to hit at once. That is correct behaviour, but
+it is not the single-leg test it looks like.
+
+With both legs running and losses independent, **a working -7 receiver shows no
+errors at all** — which is the test. What it cannot recover is a datagram missing
+from both paths at the same instant, and at a per-leg loss rate of *p* those
+coincidences arrive at *p²*: 0.5% on each leg is one in forty thousand, which is
+a visible artefact every couple of seconds at HD packet rates. If a receiver
+glitches under two-sided loss, do that arithmetic before calling it a fault.
+
+### Path skew
+
+Differential path delay is the one ST 2022-7 impairment a same-host replay cannot
+produce by accident: one pacer drives both legs, so without this the differential
+is always zero and a receiver's differential-delay window is never exercised at
+all — only its packet recovery.
+
+| Option | What it does |
+|---|---|
+| `--skew MS` | hold one leg behind the other, fixed. Positive holds B, negative holds A |
+| `--skew-window LO HI` | wander randomly between the two instead |
+| `--skew-slew MS_PER_S` | how fast skew may change (default 1) |
+| `--skew-dwell S` | longest random hold at a target (default 2) |
+
+A receiver only ever sees the *difference*, so the sign just chooses which leg
+leads. A window that straddles zero — `--skew-window -10 10` — swaps which leg
+leads as it runs.
+
+Two rules shape how it behaves, and both are worth knowing before reading a
+result:
+
+**A path can only be made later, never earlier.** The delay is applied to
+whichever leg is behind, so crossing zero is continuous rather than a jump.
+
+**Skew never steps.** Raising it by X instantly would gap the lagging leg for X;
+lowering it would release X worth of buffered packets at once, which at 3G is a
+1,350-packet microburst. Either way a receiver would be measuring that transient
+rather than the skew. So a target is approached at a bounded rate. The default
+1 ms/s means the lagging leg runs 0.1% slow while it moves — which is exactly
+what a slowly lengthening path does. Raise `--skew-slew` to sweep faster, but a
+rate approaching 1000 ms/s is a step in all but name.
+
+Constant skew on its own costs a correct receiver nothing, because it emits
+whichever copy of a datagram arrives first and never waits. Skew only bites when
+the **early** leg loses a packet and the receiver has to wait for the late copy
+while the early leg races ahead. So the test for a differential-delay window is
+skew *plus* loss on the early leg:
+
+```bash
+replay_cli red.pcap blue.pcap --group 239.1.5.5 --group-b 239.2.5.5 \
+    --iface ens20 --iface-b ens19 \
+    --skew 20 --fault-loss-a --fault-rate 1
+```
+
+The status panel reports the differential, which leg is behind, and how much is
+buffered:
+
+```
+-- path skew ---------------------------------------
+Differential           : +16.45 ms  path B behind   (window +5.0 to +25.0, target +16.45)
+Holding                : 49 / 202 batches
+```
+
+A held leg makes *Datagrams built* lead what that leg has actually sent,
+permanently and by design — hence the buffer line, so the difference is not read
+as loss.
 
 ## Reading a capture's health
 
